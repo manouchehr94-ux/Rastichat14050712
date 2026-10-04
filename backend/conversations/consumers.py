@@ -14,6 +14,7 @@ from common.ws_throttling import is_rate_limited
 from common.ws_auth import RevalidatingConsumerMixin, TicketAuthMixin
 from common import ws_tickets
 from . import ws_access
+from projects.domains import OriginDecision, decide_origin
 
 User = get_user_model()
 
@@ -121,8 +122,24 @@ class WidgetChatConsumer(BaseChatConsumer):
                 session = get_valid_session(self.session_token)
             else:
                 session = get_valid_session_by_id(self.session_id)
+            if session is None:
+                return None
+            # the project's allowed domains also gate the live socket (and are re-checked live, so removing a
+            # domain closes sockets opened from it); the Origin of a browser handshake cannot change mid-socket
+            decision = decide_origin(
+                session.visitor.project, self._origin(), establishing=False,
+                require_domains=settings.WIDGET_REQUIRE_ALLOWED_DOMAINS,
+            )
+            if decision != OriginDecision.ALLOWED:
+                return None
             return ws_access.visitor_conversation(session, self.conv_id)
         except Exception: return None
+
+    def _origin(self):
+        for name, value in self.scope.get('headers', []):
+            if name == b'origin':
+                return value.decode('latin1') or None
+        return None
 
     async def is_still_authorized(self):
         return await self._get_visitor_conversation() is not None

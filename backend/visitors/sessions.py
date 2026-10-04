@@ -10,6 +10,7 @@ from datetime import timedelta
 from django.conf import settings
 from django.core.exceptions import ValidationError
 from django.utils import timezone
+from rest_framework.exceptions import APIException
 
 from .models import VisitorSession
 
@@ -123,3 +124,40 @@ def rotate_session(session):
 def rotation_due(session):
     since = session.rotated_at or session.created_at
     return timezone.now() - since >= timedelta(hours=settings.VISITOR_SESSION_ROTATE_AFTER_HOURS)
+
+
+class WidgetOriginNotAllowed(APIException):
+    """The request's Origin is not one of the project's allowed domains (HTTP 403)."""
+    status_code = 403
+    default_code = 'origin_not_allowed'
+    default_detail = 'Origin not allowed for this project.'
+
+    def __init__(self, code=None):
+        code = code or self.default_code
+        super().__init__(detail={'error': self.default_detail, 'code': code}, code=code)
+
+
+def request_origin(request):
+    return request.headers.get('Origin') or None
+
+
+def enforce_project_origin(request, project, *, establishing=False):
+    """Raise WidgetOriginNotAllowed unless the project's domain policy admits this request (see
+    projects.domains.decide_origin). Origin is a defence against other websites, never a credential."""
+    from projects.domains import OriginDecision, decide_origin
+    decision = decide_origin(
+        project, request_origin(request), establishing=establishing,
+        require_domains=getattr(settings, 'WIDGET_REQUIRE_ALLOWED_DOMAINS', False),
+    )
+    if decision != OriginDecision.ALLOWED:
+        raise WidgetOriginNotAllowed(code=decision)
+
+
+def get_request_session(request, *, renew=True):
+    """`get_valid_session(<credential from the request>)` + the project's origin policy.
+    Returns None for a missing/invalid session; raises WidgetOriginNotAllowed (403) for a valid session used
+    from a domain the project does not allow."""
+    session = get_valid_session(extract_session_token(request), renew=renew)
+    if session is not None:
+        enforce_project_origin(request, session.visitor.project)
+    return session

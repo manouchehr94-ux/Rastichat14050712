@@ -8,7 +8,7 @@ from rest_framework import status
 from projects.models import Project
 from .models import Visitor, VisitorSession
 from .serializers import VisitorInitSerializer
-from .sessions import get_valid_session, extract_session_token, revoke_session, rotate_session
+from .sessions import get_valid_session, extract_session_token, revoke_session, rotate_session, enforce_project_origin
 
 logger = logging.getLogger(__name__)
 
@@ -20,7 +20,11 @@ class InitVisitorView(APIView):
         serializer = VisitorInitSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
 
-        project = Project.objects.get(public_key=serializer.validated_data['project_key'])
+        project = Project.objects.select_related('workspace').get(public_key=serializer.validated_data['project_key'])
+        if not project.workspace.is_active:
+            return Response({'project_key': ['Invalid or inactive project key.']}, status=status.HTTP_400_BAD_REQUEST)
+        # session creation is the one call that carries no credential yet, so the Origin policy is strictest here
+        enforce_project_origin(request, project, establishing=True)
         external_id = serializer.validated_data.get('external_id')
         attrs = {
             'name': serializer.validated_data.get('name'),
