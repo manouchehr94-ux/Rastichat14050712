@@ -73,7 +73,14 @@ class SupportFlowTests(TransactionTestCase):
         self.assertEqual(len(res.data), 0)
 
     def test_6_ws_admin_cannot_see_other_ws(self):
-        pass
+        other = Conversation.objects.create(
+            workspace=self.ws_b, type=Conversation.Type.PLATFORM_SUPPORT,
+            status=Conversation.Status.WAITING_FOR_PLATFORM, subject='other-ws')
+        self.client.credentials(HTTP_AUTHORIZATION=f'Bearer {self.token_admin}')
+        res = self.client.get('/api/v1/support/')
+        self.assertEqual(res.status_code, 200)
+        self.assertNotIn(str(other.id), [str(c['id']) for c in res.data])
+        self.assertEqual(self.client.get(f'/api/v1/support/{other.id}/messages/').status_code, 404)
 
     def test_7_pl_support_cannot_access_customer(self):
         vis = Visitor.objects.create(project=self.proj)
