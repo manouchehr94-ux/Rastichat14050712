@@ -1,7 +1,7 @@
 import json
 from django.db.models import Max, F, Q
 from django.db import models
-from rest_framework import viewsets, status, permissions as drf_permissions
+from rest_framework import viewsets, mixins, status, permissions as drf_permissions
 from rest_framework.exceptions import PermissionDenied
 from rest_framework.response import Response
 from rest_framework.views import APIView
@@ -606,12 +606,21 @@ class WorkspaceSupportViewSet(viewsets.ModelViewSet):
             MessageReceipt.objects.create(message=msg, user=request.user)
         return Response(status=200)
 
-class PlatformSupportViewSet(viewsets.ModelViewSet):
+class PlatformSupportViewSet(mixins.ListModelMixin, mixins.RetrieveModelMixin, viewsets.GenericViewSet):
+    """Platform-side inbox for store-admin support conversations.
+
+    Deliberately NOT a ModelViewSet: there is no generic create/update/delete
+    (a support agent must never be able to edit or delete a store's
+    conversation). Platform-initiated conversations get their own explicit,
+    separately-authorized endpoint. Scoped to platforms the caller belongs to.
+    """
     serializer_class = ConversationSerializer
     permission_classes = [IsPlatformSupportAgent]
 
     def get_queryset(self):
-        return Conversation.objects.filter(workspace__platform__memberships__user=self.request.user, type=Conversation.Type.PLATFORM_SUPPORT)
+        return Conversation.objects.filter(
+            workspace__platform__memberships__user=self.request.user, type=Conversation.Type.PLATFORM_SUPPORT,
+        ).distinct().order_by('-updated_at')
 
     @action(detail=True, methods=['get'])
     def messages(self, request, pk=None):
@@ -629,22 +638,32 @@ class PlatformSupportViewSet(viewsets.ModelViewSet):
     @action(detail=True, methods=['post'])
     def assign(self, request, pk=None):
         conv = self.get_object()
-        # Ensure agent belongs to the same platform
+        # Defence in depth: get_object() is already platform-scoped.
         if not request.user.platform_memberships.filter(platform=conv.workspace.platform).exists():
             return Response({'error': 'Cross-platform assignment denied'}, status=403)
-        
+
+        previous = conv.assigned_to
         conv.assigned_to = request.user
-        Assignment.objects.create(conversation=conv, assigned_to=request.user, assigned_by=request.user)
+        conv.save(update_fields=['assigned_to', 'updated_at'])
+        Assignment.objects.create(
+            conversation=conv, assigned_to=request.user, assigned_by=request.user,
+            previous_assignee=previous, action=Assignment.Action.REASSIGN if previous else Assignment.Action.CLAIM,
+        )
         AuditEvent.objects.create(actor=request.user, action='support_conversation_assigned', target_type='conversation', target_id=str(conv.id))
-        return Response(ConversationSerializer(conv).data)
+        return Response(ConversationSerializer(conv, context={'request': request}).data)
 
     @action(detail=True, methods=['post'])
     def reply(self, request, pk=None):
         conv = self.get_object()
-        content = request.data.get('content', '').strip()
+        content = (request.data.get('content') or '').strip()
         if not content: return Response({'error': 'Empty'}, status=400)
-        
-        msg = Message.objects.create(conversation=conv, sender=request.user, sender_type=Message.SenderType.USER, content=content, client_message_id=request.data['client_message_id'])
+        if len(content) > 5000: return Response({'error': 'Too long'}, status=400)
+        client_msg_id = request.data.get('client_message_id')
+        if not client_msg_id: return Response({'error': 'Missing client_message_id'}, status=400)
+        if Message.objects.filter(conversation=conv, client_message_id=client_msg_id).exists():
+            return Response({'error': 'Duplicate'}, status=409)
+
+        msg = Message.objects.create(conversation=conv, sender=request.user, sender_type=Message.SenderType.USER, content=content, client_message_id=client_msg_id)
         conv.status = Conversation.Status.WAITING_FOR_WORKSPACE
         conv.save()
 
