@@ -14,6 +14,7 @@ from common.tenancy import resolve_operator_workspace
 from conversations.models import Conversation
 from projects.models import Project
 from visitors.models import Visitor, VisitorSession
+from visitors.sessions import get_valid_session, extract_session_token
 
 from . import services
 from .attachments import UploadValidationError, validate_and_normalize_kb_upload
@@ -316,13 +317,8 @@ class PublicKnowledgeBaseRelatedArticlesView(APIView):
 
 
 def _resolve_optional_visitor(request):
-    token = request.query_params.get('session_token') or request.data.get('session_token')
-    if not token:
-        return None
-    try:
-        return VisitorSession.objects.select_related('visitor').get(token=token).visitor
-    except (VisitorSession.DoesNotExist, DjangoValidationError, ValueError):
-        return None
+    session = get_valid_session(extract_session_token(request))
+    return session.visitor if session else None
 
 
 class PublicKnowledgeBaseFeedbackView(APIView):
@@ -336,10 +332,9 @@ class PublicKnowledgeBaseFeedbackView(APIView):
 
     def post(self, request, slug):
         article = _get_public_article_or_404(request, slug)
-        try:
-            session = VisitorSession.objects.select_related('visitor').get(token=request.data.get('session_token'))
-        except (VisitorSession.DoesNotExist, DjangoValidationError, ValueError):
-            return Response({'error': 'Invalid session'}, status=status.HTTP_401_UNAUTHORIZED)
+        session = get_valid_session(extract_session_token(request))
+        if session is None:
+            return Response({'error': 'Invalid session', 'code': 'session_invalid'}, status=status.HTTP_401_UNAUTHORIZED)
         is_helpful = request.data.get('is_helpful')
         if is_helpful is None:
             return Response({'error': 'is_helpful is required'}, status=status.HTTP_400_BAD_REQUEST)

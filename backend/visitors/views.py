@@ -2,11 +2,13 @@ import logging
 import uuid
 from django.conf import settings
 from rest_framework.views import APIView
+from rest_framework.throttling import ScopedRateThrottle
 from rest_framework.response import Response
 from rest_framework import status
 from projects.models import Project
 from .models import Visitor, VisitorSession
 from .serializers import VisitorInitSerializer
+from .sessions import get_valid_session, extract_session_token, revoke_session, rotate_session
 
 logger = logging.getLogger(__name__)
 
@@ -49,5 +51,36 @@ class InitVisitorView(APIView):
         session = VisitorSession.objects.create(visitor=visitor)
         return Response({
             'visitor_id': str(visitor.id),
-            'session_token': str(session.token)
+            'session_token': str(session.token),
+            'expires_at': session.expires_at,
         }, status=status.HTTP_200_OK)
+
+
+class RevokeVisitorSessionView(APIView):
+    """Customer logout: the session token stops working immediately (REST and
+    WebSocket). Idempotent — an unknown/expired/already-revoked token is a 204
+    too, so the endpoint reveals nothing about token validity. The Visitor and
+    their conversations are kept (operators still see the history)."""
+    permission_classes = []
+    throttle_classes = [ScopedRateThrottle]
+    throttle_scope = 'widget_session'
+
+    def post(self, request):
+        session = get_valid_session(extract_session_token(request), renew=False)
+        if session is not None:
+            revoke_session(session)
+        return Response(status=status.HTTP_204_NO_CONTENT)
+
+
+class RotateVisitorSessionView(APIView):
+    """Swap a valid session's token for a fresh one; the old token is dead at once."""
+    permission_classes = []
+    throttle_classes = [ScopedRateThrottle]
+    throttle_scope = 'widget_session'
+
+    def post(self, request):
+        session = get_valid_session(extract_session_token(request), renew=False)
+        if session is None:
+            return Response({'error': 'Invalid session', 'code': 'session_invalid'}, status=status.HTTP_401_UNAUTHORIZED)
+        rotate_session(session)
+        return Response({'session_token': str(session.token), 'expires_at': session.expires_at})

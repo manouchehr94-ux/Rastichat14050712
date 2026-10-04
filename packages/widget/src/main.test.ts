@@ -148,6 +148,66 @@ describe('RastiChatWidget', () => {
     );
   });
 
+  it('recovers from an expired/revoked stored session: drops it, opens a fresh guest session and retries once', async () => {
+    localStorage.setItem('rasti_session', 'dead-session');
+    let startCalls = 0;
+    fetchMock.mockImplementation((url: string) => {
+      if (url.includes('/widget/init/')) return jsonResponse({ session_token: 'fresh-session' });
+      if (url.includes('/widget/start/')) {
+        startCalls += 1;
+        return startCalls === 1
+          ? Promise.resolve({ ok: false, status: 401, json: () => Promise.resolve({ code: 'session_invalid' }) } as Response)
+          : jsonResponse({ id: 'conv-new' });
+      }
+      return jsonResponse([]);
+    });
+    await initWidget();
+    expect(localStorage.getItem('rasti_session')).toBe('fresh-session');
+    expect(startCalls).toBe(2);
+    expect(FakeWebSocket.instances.some((w) => w.url.includes('fresh-session') && w.url.includes('conv-new'))).toBe(true);
+    expect(FakeWebSocket.instances.some((w) => w.url.includes('dead-session'))).toBe(false);
+  });
+
+  it('does not loop when the server keeps answering 401 (recovers at most once)', async () => {
+    localStorage.setItem('rasti_session', 'dead-session');
+    let startCalls = 0;
+    fetchMock.mockImplementation((url: string) => {
+      if (url.includes('/widget/init/')) return jsonResponse({ session_token: 'fresh-session' });
+      if (url.includes('/widget/start/')) {
+        startCalls += 1;
+        return Promise.resolve({ ok: false, status: 401, json: () => Promise.resolve({}) } as Response);
+      }
+      return jsonResponse([]);
+    });
+    await initWidget();
+    expect(startCalls).toBe(2);
+  });
+
+  it('rotates the session token when the server marks it due and uses the new token for the socket', async () => {
+    localStorage.setItem('rasti_session', 'old-token');
+    fetchMock.mockImplementation((url: string) => {
+      if (url.includes('/widget/start/')) return jsonResponse({ id: 'conv-1', rotate_session: true });
+      if (url.includes('/widget/session/rotate/')) return jsonResponse({ session_token: 'rotated-token' });
+      return jsonResponse([]);
+    });
+    await initWidget();
+    expect(localStorage.getItem('rasti_session')).toBe('rotated-token');
+    expect(FakeWebSocket.instances.map((w) => w.url).join(' ')).toContain('rotated-token');
+    expect(FakeWebSocket.instances.map((w) => w.url).join(' ')).not.toContain('old-token');
+  });
+
+  it('logout revokes the session server-side, forgets it locally and closes the socket', async () => {
+    const ws = await initWidget();
+    expect(localStorage.getItem('rasti_session')).toBe('sess-1');
+    await window.RastiChat.logout();
+    expect(localStorage.getItem('rasti_session')).toBeNull();
+    expect(ws.readyState).toBe(FakeWebSocket.CLOSED);
+    expect(fetchMock).toHaveBeenCalledWith(
+      expect.stringContaining('/widget/session/revoke/'),
+      expect.objectContaining({ body: JSON.stringify({ session_token: 'sess-1' }) }),
+    );
+  });
+
   it('sends a text message over the websocket and renders it optimistically', async () => {
     const ws = await initWidget();
     const input = document.getElementById('rasti-input') as HTMLInputElement;
