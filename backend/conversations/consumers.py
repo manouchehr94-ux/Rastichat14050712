@@ -51,6 +51,18 @@ class BaseChatConsumer(TicketAuthMixin, RevalidatingConsumerMixin, AsyncJsonWebs
         await self.send_json({'type': 'branding.updated', 'branding': event['branding']})
 
 
+class StaffRateLimitMixin:
+    """Fixed-window per-user send limit for the staff sockets; keyed on the authenticated user id
+    (established at auth time, cannot be forged mid-socket). Tells the client instead of silently dropping."""
+    async def _staff_rate_limited(self, scope):
+        limited = await is_rate_limited(
+            scope, str(self.user.id), settings.STAFF_WS_MESSAGE_RATE_LIMIT, settings.STAFF_WS_MESSAGE_RATE_WINDOW_SECONDS,
+        )
+        if limited:
+            await self.send_json({'type': 'rate_limited', 'retry_after': settings.STAFF_WS_MESSAGE_RATE_WINDOW_SECONDS})
+        return limited
+
+
 class OpsEventsMixin:
     """Operator-only realtime events, delivered on the `chat_ops_<id>` group
     that only DashboardChatConsumer ever joins — never the widget socket, so
@@ -197,7 +209,7 @@ class WidgetChatConsumer(BaseChatConsumer):
         for msg in self.conversation.messages.exclude(receipts__visitor=self.conversation.visitor).exclude(sender_type=Message.SenderType.VISITOR):
             MessageReceipt.objects.create(message=msg, visitor=self.conversation.visitor)
 
-class DashboardChatConsumer(OpsEventsMixin, BaseChatConsumer):
+class DashboardChatConsumer(StaffRateLimitMixin, OpsEventsMixin, BaseChatConsumer):
     TICKET_KIND = ws_tickets.KIND_DASHBOARD_CHAT
 
     async def legacy_connect(self):
@@ -281,6 +293,7 @@ class DashboardChatConsumer(OpsEventsMixin, BaseChatConsumer):
             return
         msg_text = content.get('message', '').strip()
         if not msg_text or len(msg_text) > 5000: return
+        if await self._staff_rate_limited('operator_ws_message'): return
         msg = await self._save_user_message(content.get('client_message_id'), msg_text)
         if not msg: return
         await self.channel_layer.group_send(self.group_name, {'type': 'chat.message', 'message': {
@@ -310,7 +323,7 @@ class DashboardChatConsumer(OpsEventsMixin, BaseChatConsumer):
         for msg in self.conversation.messages.exclude(receipts__user=self.user).exclude(sender_type=Message.SenderType.USER):
             MessageReceipt.objects.create(message=msg, user=self.user)
 
-class DashboardSupportConsumer(BaseChatConsumer):
+class DashboardSupportConsumer(StaffRateLimitMixin, BaseChatConsumer):
     TICKET_KIND = ws_tickets.KIND_SUPPORT
 
     async def legacy_connect(self):
@@ -364,6 +377,7 @@ class DashboardSupportConsumer(BaseChatConsumer):
     async def receive_json(self, content):
         msg_text = content.get('message', '').strip()
         if not msg_text or len(msg_text) > 5000: return
+        if await self._staff_rate_limited('support_ws_message'): return
         msg = await self._save_support_message(content.get('client_message_id'), msg_text)
         if not msg: return
         await self.channel_layer.group_send(self.group_name, {'type': 'chat.message', 'message': {'id': str(msg.id), 'sender_type': 'USER', 'content': msg.content, 'created_at': msg.created_at.isoformat()}})

@@ -392,6 +392,10 @@ WS_REVALIDATE_SECONDS = int(os.environ.get('WS_REVALIDATE_SECONDS', 5))
 VISITOR_SESSION_TTL_DAYS = int(os.environ.get('VISITOR_SESSION_TTL_DAYS', 30))
 VISITOR_SESSION_MAX_AGE_DAYS = int(os.environ.get('VISITOR_SESSION_MAX_AGE_DAYS', 180))
 VISITOR_SESSION_ROTATE_AFTER_HOURS = int(os.environ.get('VISITOR_SESSION_ROTATE_AFTER_HOURS', 24))
+# Staff-side WebSocket send limit (operator chat + support sockets), per authenticated user, fixed window — the
+# REST `support_write` scope does not reach a Channels consumer's receive_json (see common/ws_throttling.py).
+STAFF_WS_MESSAGE_RATE_LIMIT = int(os.environ.get('STAFF_WS_MESSAGE_RATE_LIMIT', 60))
+STAFF_WS_MESSAGE_RATE_WINDOW_SECONDS = int(os.environ.get('STAFF_WS_MESSAGE_RATE_WINDOW_SECONDS', 60))
 WIDGET_WS_MESSAGE_RATE_LIMIT = int(os.environ.get('WIDGET_WS_MESSAGE_RATE_LIMIT', 30))
 WIDGET_WS_MESSAGE_RATE_WINDOW_SECONDS = int(os.environ.get('WIDGET_WS_MESSAGE_RATE_WINDOW_SECONDS', 60))
 
@@ -470,6 +474,8 @@ REST_FRAMEWORK = {
         'login': None if TESTING else os.environ.get('LOGIN_THROTTLE_RATE', '10/min'),
         'widget_start': None if TESTING else os.environ.get('WIDGET_START_THROTTLE_RATE', '20/min'),
         'widget_message': None if TESTING else os.environ.get('WIDGET_MESSAGE_THROTTLE_RATE', '60/min'),
+        'support_write': None if TESTING else os.environ.get('SUPPORT_WRITE_THROTTLE_RATE', '60/min'),
+        'widget_init': None if TESTING else os.environ.get('WIDGET_INIT_THROTTLE_RATE', '30/min'),
         'ws_ticket': None if TESTING else os.environ.get('WS_TICKET_THROTTLE_RATE', '120/min'),
         'widget_session': None if TESTING else os.environ.get('WIDGET_SESSION_THROTTLE_RATE', '30/min'),
         'widget_rating': None if TESTING else os.environ.get('WIDGET_RATING_THROTTLE_RATE', '20/min'),
