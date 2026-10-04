@@ -111,8 +111,9 @@ class RichMessageFlowTests(TransactionTestCase):
         self.assertEqual(res.data[0]['content'], 'Hi there')
 
     def test_widget_history_rejects_wrong_session(self):
+        # an unknown session is an authentication failure (401), no longer indistinguishable from a missing conversation
         res = self.client.get(f'/api/v1/widget/conversations/{self.conv.id}/messages/?session_token=00000000-0000-0000-0000-000000000000')
-        self.assertEqual(res.status_code, 404)
+        self.assertEqual(res.status_code, 401)
 
     def test_operator_mark_read_creates_receipts_and_seen_flag(self):
         msg = Message.objects.create(conversation=self.conv, sender_type='VISITOR', sender_visitor=self.visitor, content='Hey', client_message_id='m1')

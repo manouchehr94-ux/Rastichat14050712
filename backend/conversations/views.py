@@ -16,6 +16,7 @@ from common.pagination import StandardPagination
 from common.permissions import IsWorkspaceOperator, IsWorkspaceAdmin, IsPlatformSupportAgent, user_can_supervise_workspace
 from common.tenancy import resolve_operator_workspace, resolve_admin_workspace, admin_workspace_ids
 from visitors.models import Visitor, VisitorSession
+from visitors.sessions import get_valid_session, extract_session_token, rotation_due
 from catalog.models import Product
 from teams.models import TeamMembership
 from django.contrib.auth import get_user_model
@@ -399,10 +400,9 @@ class StartCustomerChatView(APIView):
     def post(self, request):
         from django.core.exceptions import ValidationError
         from django.db import transaction
-        try:
-            session = VisitorSession.objects.get(token=request.data.get('session_token'))
-        except (VisitorSession.DoesNotExist, ValidationError):
-            return Response({'error': 'Invalid session'}, status=status.HTTP_401_UNAUTHORIZED)
+        session = get_valid_session(extract_session_token(request))
+        if session is None:
+            return Response({'error': 'Invalid session', 'code': 'session_invalid'}, status=status.HTTP_401_UNAUTHORIZED)
         with transaction.atomic():
             conv, created = Conversation.objects.get_or_create(visitor=session.visitor, workspace=session.visitor.project.workspace, type=Conversation.Type.CUSTOMER, status=Conversation.Status.OPEN)
             if not created and conv.status == 'CLOSED': conv.status = 'OPEN'; conv.save()
@@ -427,6 +427,8 @@ class StartCustomerChatView(APIView):
             conv_services.broadcast_ops_event(conv.id, 'conversation.queued', conv_services.conversation_summary(conv))
         data = ConversationSerializer(conv).data
         data['branding'] = build_widget_branding(conv)
+        data['session_expires_at'] = session.expires_at
+        data['rotate_session'] = rotation_due(session)
         return Response(data, status=200)
 
 class MessageListView(APIView):
@@ -470,16 +472,29 @@ class SendMessageView(APIView):
 # These mirror the operator-side endpoints above but authenticate via the
 # visitor's session_token instead of a JWT, matching StartCustomerChatView.
 
+class WidgetSessionInvalid(Exception):
+    """The visitor session is unknown, expired, revoked, rotated away or its project is inactive."""
+
+
 def _get_visitor_conversation(session_token, conv_id):
-    session = VisitorSession.objects.get(token=session_token)
+    session = get_valid_session(session_token)
+    if session is None:
+        raise WidgetSessionInvalid()
     return Conversation.objects.get(id=conv_id, visitor=session.visitor, type=Conversation.Type.CUSTOMER)
+
+
+def _session_invalid_response():
+    return Response({'error': 'Invalid session', 'code': 'session_invalid'}, status=status.HTTP_401_UNAUTHORIZED)
+
 
 class WidgetMessageListView(APIView):
     permission_classes = []
     def get(self, request, conv_id):
         try:
-            conv = _get_visitor_conversation(request.query_params.get('session_token'), conv_id)
-        except (VisitorSession.DoesNotExist, Conversation.DoesNotExist, DjangoValidationError, ValueError):
+            conv = _get_visitor_conversation(extract_session_token(request), conv_id)
+        except WidgetSessionInvalid:
+            return _session_invalid_response()
+        except (Conversation.DoesNotExist, DjangoValidationError, ValueError):
             return Response(status=status.HTTP_404_NOT_FOUND)
         # Internal notes must never reach the visitor-facing widget.
         msgs = conv.messages.exclude(message_type=Message.MessageType.INTERNAL_NOTE).order_by('created_at')
@@ -493,8 +508,10 @@ class WidgetBrandingView(APIView):
     permission_classes = []
     def get(self, request, conv_id):
         try:
-            conv = _get_visitor_conversation(request.query_params.get('session_token'), conv_id)
-        except (VisitorSession.DoesNotExist, Conversation.DoesNotExist, DjangoValidationError, ValueError):
+            conv = _get_visitor_conversation(extract_session_token(request), conv_id)
+        except WidgetSessionInvalid:
+            return _session_invalid_response()
+        except (Conversation.DoesNotExist, DjangoValidationError, ValueError):
             return Response(status=status.HTTP_404_NOT_FOUND)
         return Response(build_widget_branding(conv))
 
@@ -502,8 +519,10 @@ class WidgetMarkReadView(APIView):
     permission_classes = []
     def post(self, request, conv_id):
         try:
-            conv = _get_visitor_conversation(request.data.get('session_token'), conv_id)
-        except (VisitorSession.DoesNotExist, Conversation.DoesNotExist, DjangoValidationError, ValueError):
+            conv = _get_visitor_conversation(extract_session_token(request), conv_id)
+        except WidgetSessionInvalid:
+            return _session_invalid_response()
+        except (Conversation.DoesNotExist, DjangoValidationError, ValueError):
             return Response(status=status.HTTP_404_NOT_FOUND)
         for msg in conv.messages.exclude(receipts__visitor=conv.visitor).exclude(sender_type=Message.SenderType.VISITOR):
             MessageReceipt.objects.create(message=msg, visitor=conv.visitor)
@@ -517,8 +536,10 @@ class WidgetUploadView(APIView):
     throttle_scope = 'media_upload'
     def post(self, request, conv_id):
         try:
-            conv = _get_visitor_conversation(request.data.get('session_token'), conv_id)
-        except (VisitorSession.DoesNotExist, Conversation.DoesNotExist, DjangoValidationError, ValueError):
+            conv = _get_visitor_conversation(extract_session_token(request), conv_id)
+        except WidgetSessionInvalid:
+            return _session_invalid_response()
+        except (Conversation.DoesNotExist, DjangoValidationError, ValueError):
             return Response(status=status.HTTP_404_NOT_FOUND)
         message_type = request.data.get('message_type', Message.MessageType.IMAGE)
         if message_type not in (Message.MessageType.IMAGE, Message.MessageType.VOICE):
@@ -557,8 +578,10 @@ class WidgetRateConversationView(APIView):
     throttle_scope = 'widget_rating'
     def post(self, request, conv_id):
         try:
-            conv = _get_visitor_conversation(request.data.get('session_token'), conv_id)
-        except (VisitorSession.DoesNotExist, Conversation.DoesNotExist, DjangoValidationError, ValueError):
+            conv = _get_visitor_conversation(extract_session_token(request), conv_id)
+        except WidgetSessionInvalid:
+            return _session_invalid_response()
+        except (Conversation.DoesNotExist, DjangoValidationError, ValueError):
             return Response(status=status.HTTP_404_NOT_FOUND)
         try:
             rating = int(request.data.get('rating'))

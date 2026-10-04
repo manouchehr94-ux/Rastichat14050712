@@ -1,5 +1,6 @@
 from django.urls import path, include
 from rest_framework.routers import DefaultRouter
+from visitors.urls import session_urlpatterns
 from common.views import HealthCheckView, LivenessView, MonitoringView, ReadinessView
 from conversations.views import (
     CustomerConversationViewSet, PlatformSupportViewSet, WorkspaceSupportViewSet,
@@ -53,6 +54,7 @@ urlpatterns = [
     path('health/ready/', ReadinessView.as_view(), name='health-ready'),
     path('health/monitoring/', MonitoringView.as_view(), name='health-monitoring'),
     path('widget/init/', include('visitors.urls')),
+    path('widget/session/', include((session_urlpatterns, 'visitors-session'))),
     path('widget/start/', StartCustomerChatView.as_view(), name='widget-start'),
     # These three must be resolved BEFORE the router include below: the
     # `macros` viewset is registered at the bare `macros` prefix (unlike
