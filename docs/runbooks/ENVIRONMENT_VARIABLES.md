@@ -134,7 +134,6 @@ membership and role, workspace/platform/project active, visitor session still va
 delivered event, caching a positive result for this many seconds. A user who is deactivated, removed or demoted therefore
 stops sending and receiving within this window (socket closed with code `4403`). `0` checks on every event. The JWT's own
 expiry is enforced at connect time only; a long-lived socket survives token expiry but not permission changes.
-
 ## Visitor session lifecycle (`VISITOR_SESSION_*`)
 
 `VISITOR_SESSION_TTL_DAYS` (30) — sliding expiry, renewed on use (at most once per half-TTL).
@@ -152,3 +151,10 @@ deploy time + max age` — a one-TTL grace so a customer with an open conversati
 widget; only credentials are written. After the grace period an unused legacy session stops working; that customer's next
 visit opens a fresh guest session (operators still see the old conversation). Do **not** run it against production without
 the owner's approval.
+
+## `LEGACY_URL_CREDENTIALS_ENABLED`, `WS_TICKET_TTL_SECONDS`, `WS_AUTH_TIMEOUT_SECONDS`, `WS_TICKET_THROTTLE_RATE`
+
+See `docs/runbooks/WS_TICKETS_AND_URL_CREDENTIALS.md`. `LEGACY_URL_CREDENTIALS_ENABLED` defaults to **off** on staging/production
+(on for local development); turning it on there requires `LEGACY_URL_CREDENTIALS_ACK=accept-credentials-in-urls` and is reported by
+the deploy security gate as `common.W002`. `WS_TICKET_TTL_SECONDS` (30) is the ticket lifetime, `WS_AUTH_TIMEOUT_SECONDS` (10) how
+long an accepted socket may wait for its auth frame, `WS_TICKET_THROTTLE_RATE` (120/min) throttles ticket minting.

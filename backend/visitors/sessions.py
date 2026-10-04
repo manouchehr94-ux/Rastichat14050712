@@ -47,7 +47,26 @@ def extract_session_token(request):
     token = data.get('session_token') if hasattr(data, 'get') else None
     if token:
         return token
-    return request.query_params.get('session_token') if hasattr(request, 'query_params') else None
+    if getattr(settings, 'LEGACY_URL_CREDENTIALS_ENABLED', False) and hasattr(request, 'query_params'):
+        return request.query_params.get('session_token')  # legacy: credentials in the URL get logged
+    return None
+
+
+def _is_live(session, now):
+    if session.revoked_at is not None or now >= effective_expiry(session):
+        return False
+    project = session.visitor.project
+    return bool(project.is_active and project.workspace.is_active)
+
+
+def get_valid_session_by_id(session_id):
+    """Same validity rules as `get_valid_session`, for a socket that authenticated with a
+    ticket bound to the session row (it survives token rotation, not revocation/expiry)."""
+    try:
+        session = VisitorSession.objects.select_related('visitor__project__workspace').get(id=session_id)
+    except (VisitorSession.DoesNotExist, ValidationError, ValueError):
+        return None
+    return session if _is_live(session, timezone.now()) else None
 
 
 def get_valid_session(token, *, renew=True):
@@ -63,10 +82,7 @@ def get_valid_session(token, *, renew=True):
     except (VisitorSession.DoesNotExist, ValidationError, ValueError):
         return None
     now = timezone.now()
-    if session.revoked_at is not None or now >= effective_expiry(session):
-        return None
-    project = session.visitor.project
-    if not (project.is_active and project.workspace.is_active):
+    if not _is_live(session, now):
         return None
     if renew:
         _renew(session, now)

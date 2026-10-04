@@ -102,6 +102,8 @@ class RastiChatWidget {
     private noticeHideTimer: number | undefined;
 
     private ws: WebSocket | null = null;
+    private wsReady = false;
+    private reconnectTimer: number | undefined;
     private sessionToken: string | null = null;
     private convId: string | null = null;
     private apiBase = 'http://localhost:8080/api/v1';
@@ -490,6 +492,8 @@ class RastiChatWidget {
 
     /** Close the socket without letting its onclose handler schedule a reconnect. */
     private dropSocket() {
+        window.clearTimeout(this.reconnectTimer);
+        this.wsReady = false;
         if (!this.ws) return;
         this.ws.onclose = null;
         this.ws.close();
@@ -559,7 +563,10 @@ class RastiChatWidget {
     private async loadHistory() {
         if (!this.convId || !this.sessionToken) return;
         try {
-            const res = await fetch(`${this.apiBase}/widget/conversations/${this.convId}/messages/?session_token=${this.sessionToken}`);
+            // the credential travels in a header, never in the URL (URLs get logged by proxies)
+            const res = await fetch(`${this.apiBase}/widget/conversations/${this.convId}/messages/`, {
+                headers: { 'X-Widget-Session': this.sessionToken },
+            });
             if (res.status === 401) { if (await this.recoverFromInvalidSession()) await this.startChat(false); return; }
             if (!res.ok) return;
             const msgs: WireMessage[] = await res.json();
@@ -570,17 +577,61 @@ class RastiChatWidget {
         }
     }
 
-    private connectWebSocket() {
+    private canSend(): boolean {
+        return !!this.ws && this.wsReady && this.ws.readyState === WebSocket.OPEN;
+    }
+
+    private scheduleReconnect() {
+        window.clearTimeout(this.reconnectTimer);
+        this.reconnectTimer = window.setTimeout(() => { void this.connectWebSocket(); }, 2000);
+    }
+
+    /**
+     * Open the live connection. No credential is placed in the URL: a short-lived single-use
+     * ticket is minted over REST (session credential in a header) and sent as the first frame.
+     * The socket only counts as ready once the server answers `auth.ok`.
+     */
+    private async connectWebSocket() {
         if (!this.convId || !this.sessionToken) return;
+        const convId = this.convId;
+        let ticket: string;
+        try {
+            const res = await fetch(`${this.apiBase}/widget/ws-ticket/`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json', 'X-Widget-Session': this.sessionToken },
+                body: JSON.stringify({ conversation_id: convId }),
+            });
+            if (res.status === 401) {
+                if (await this.recoverFromInvalidSession()) await this.startChat(false);
+                return;
+            }
+            if (!res.ok) throw new Error(`ticket request failed (${res.status})`);
+            ticket = (await res.json()).ticket;
+        } catch (error) {
+            console.error("RastiChat realtime ticket failed", error);
+            this.offlineBanner.classList.add('show');
+            this.scheduleReconnect();
+            return;
+        }
+        if (this.convId !== convId) return; // the session was replaced while the ticket was in flight
 
-        this.ws = new WebSocket(`${this.wsBase}/widget/${this.sessionToken}/${this.convId}/`);
+        const ws = new WebSocket(`${this.wsBase}/v2/widget/${convId}/`);
+        this.ws = ws;
+        this.wsReady = false;
 
-        this.ws.onopen = () => {
-            this.offlineBanner.classList.remove('show');
+        ws.onopen = () => {
+            ws.send(JSON.stringify({ type: 'auth', ticket }));
         };
 
-        this.ws.onmessage = (event) => {
+        ws.onmessage = (event) => {
             const data: WireMessage = JSON.parse(event.data);
+            if (!this.wsReady) {
+                if (data.type === 'auth.ok') {
+                    this.wsReady = true;
+                    this.offlineBanner.classList.remove('show');
+                }
+                return;
+            }
             if (data.type === 'typing') {
                 if (data.sender_type === 'USER') this.showTyping();
                 return;
@@ -606,9 +657,10 @@ class RastiChatWidget {
             this.scrollToBottom();
         };
 
-        this.ws.onclose = () => {
+        ws.onclose = () => {
+            this.wsReady = false;
             this.offlineBanner.classList.add('show');
-            setTimeout(() => this.connectWebSocket(), 2000);
+            this.scheduleReconnect();
         };
     }
 
@@ -631,14 +683,14 @@ class RastiChatWidget {
         const now = Date.now();
         if (now - this.lastTypingSentAt < 1500) return;
         this.lastTypingSentAt = now;
-        if (this.ws && this.ws.readyState === WebSocket.OPEN) {
-            this.ws.send(JSON.stringify({ type: 'typing' }));
+        if (this.canSend()) {
+            this.ws!.send(JSON.stringify({ type: 'typing' }));
         }
     }
 
     private sendMarkRead() {
-        if (this.ws && this.ws.readyState === WebSocket.OPEN) {
-            this.ws.send(JSON.stringify({ type: 'mark_read' }));
+        if (this.canSend()) {
+            this.ws!.send(JSON.stringify({ type: 'mark_read' }));
         }
     }
 
@@ -648,10 +700,10 @@ class RastiChatWidget {
 
     private sendMessage() {
         const text = this.inputField.value.trim();
-        if (!text || !this.ws || this.ws.readyState !== WebSocket.OPEN) return;
+        if (!text || !this.canSend()) return;
 
         const clientId = 'msg_' + Date.now() + '_' + Math.random().toString(36).slice(2, 8);
-        this.ws.send(JSON.stringify({ message: text, client_message_id: clientId }));
+        this.ws!.send(JSON.stringify({ message: text, client_message_id: clientId }));
 
         this.renderIncoming({
             sender_type: 'VISITOR', content: text, message_type: 'TEXT',

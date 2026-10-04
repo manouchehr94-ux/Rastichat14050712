@@ -1,6 +1,20 @@
 const API_BASE = process.env.NEXT_PUBLIC_API_BASE_URL || 'http://localhost:8080/api/v1';
 const WS_BASE = process.env.NEXT_PUBLIC_WS_BASE_URL || 'ws://localhost:8080/ws';
 
+import { TicketSocket } from './ticketSocket';
+
+/**
+ * Credential-free live connection (see ticketSocket.ts). TicketSocket implements exactly the part of the
+ * WebSocket API every caller uses (send / close / readyState), so it is typed as WebSocket here and the
+ * call sites stay unchanged.
+ */
+const openTicketSocket = (path: string, ticketRequest: Record<string, unknown>, onMessage: (data: unknown) => void): WebSocket =>
+    new TicketSocket({
+        apiBase: API_BASE, wsBase: WS_BASE, getToken: () => localStorage.getItem('token'), path, ticketRequest, onMessage,
+    }) as unknown as WebSocket;
+
+export interface SupportSocketMessage { id: string; content: string; sender_type: string; [key: string]: unknown }
+
 export const login = async (email: string, password: string) => {
     const res = await fetch(`${API_BASE}/auth/login/`, {
         method: 'POST',
@@ -236,12 +250,8 @@ export const markAllNotificationsRead = async () => {
     if (!res.ok) throw new Error('Failed to mark all notifications read');
 };
 
-export const connectNotificationsWebSocket = <T,>(onMessage: (data: T) => void) => {
-    const token = getToken();
-    const ws = new WebSocket(`${WS_BASE}/notifications/${token}/`);
-    ws.onmessage = (event) => onMessage(JSON.parse(event.data) as T);
-    return ws;
-};
+export const connectNotificationsWebSocket = <T,>(onMessage: (data: T) => void): WebSocket =>
+    openTicketSocket('/v2/notifications/', { kind: 'notifications' }, (data) => onMessage(data as T));
 
 export const uploadAttachment = async (convId: string, file: File, messageType: 'IMAGE' | 'VOICE', clientId: string, extra?: Record<string, string>) => {
     const form = new FormData();
@@ -352,21 +362,8 @@ export const sendMarkReadEvent = (ws: WebSocket | null) => {
     if (ws && ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ type: 'mark_read' }));
 };
 
-export const connectWebSocket = <T,>(convId: string, onMessage: (data: T) => void) => {
-    const token = getToken();
-    console.log("Connecting to WS:", `${WS_BASE}/dashboard/${token}/${convId}/`);
-    const ws = new WebSocket(`${WS_BASE}/dashboard/${token}/${convId}/`);
-
-    ws.onopen = () => console.log("✅ Dashboard WS Connected");
-    ws.onclose = (event) => console.log("❌ Dashboard WS Closed", event.code, event.reason);
-    ws.onerror = (error) => console.log("⚠️ Dashboard WS Error", error);
-
-    ws.onmessage = (event) => {
-        console.log("📩 Dashboard WS Message", event.data);
-        onMessage(JSON.parse(event.data) as T);
-    };
-    return ws;
-};
+export const connectWebSocket = <T,>(convId: string, onMessage: (data: T) => void): WebSocket =>
+    openTicketSocket(`/v2/dashboard/${convId}/`, { kind: 'dashboard_chat', conversation_id: convId }, (data) => onMessage(data as T));
 
 export const fetchSupportConversations = async () => {
     const res = await fetch(`${API_BASE}/support/`, { headers: { 'Authorization': `Bearer ${getToken()}` } });
@@ -394,12 +391,8 @@ export const sendSupportMessage = async (convId: string, content: string, client
     if (!res.ok) throw new Error('Failed to send message');
     return res.json();
 };
-export const connectSupportWebSocket = (convId: string, onMessage: (data: any) => void) => {
-    const token = getToken();
-    const ws = new WebSocket(`${WS_BASE}/dashboard/support/${token}/${convId}/`);
-    ws.onmessage = (event) => onMessage(JSON.parse(event.data));
-    return ws;
-};
+export const connectSupportWebSocket = (convId: string, onMessage: (data: SupportSocketMessage) => void): WebSocket =>
+    openTicketSocket(`/v2/support/${convId}/`, { kind: 'support', conversation_id: convId }, (data) => onMessage(data as SupportSocketMessage));
 
 // --- Automation rules ---
 

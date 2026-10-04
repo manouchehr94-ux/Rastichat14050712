@@ -6,17 +6,22 @@ from rest_framework_simplejwt.tokens import AccessToken
 from django.contrib.auth import get_user_model
 from .models import Conversation, Message, MessageReceipt
 from .branding import build_widget_branding
-from visitors.sessions import get_valid_session
+from visitors.sessions import get_valid_session, get_valid_session_by_id
 from workspaces.models import WorkspaceMembership
 from platforms.models import PlatformMembership
 from accounts.presence import touch_presence
 from common.ws_throttling import is_rate_limited
-from common.ws_auth import RevalidatingConsumerMixin
+from common.ws_auth import RevalidatingConsumerMixin, TicketAuthMixin
+from common import ws_tickets
+from . import ws_access
 
 User = get_user_model()
 
-class BaseChatConsumer(RevalidatingConsumerMixin, AsyncJsonWebsocketConsumer):
+class BaseChatConsumer(TicketAuthMixin, RevalidatingConsumerMixin, AsyncJsonWebsocketConsumer):
     async def receive(self, text_data=None, bytes_data=None, **kwargs):
+        if self.is_ticket_mode() and not self.ticket_authenticated:
+            await self.receive_ticket_frame(text_data)
+            return
         if text_data:
             try: json.loads(text_data)
             except json.JSONDecodeError: return
@@ -24,6 +29,10 @@ class BaseChatConsumer(RevalidatingConsumerMixin, AsyncJsonWebsocketConsumer):
 
     async def chat_message(self, event):
         await self.send_json({**event['message'], 'type': 'chat.message'})
+
+    async def disconnect(self, close_code):
+        self._cancel_deadline()
+        await self.leave_groups()
 
     async def typing_indicator(self, event):
         # Don't echo the typing event back to the person who is typing.
@@ -80,26 +89,39 @@ class OpsEventsMixin:
         await self.send_json(event)
 
 class WidgetChatConsumer(BaseChatConsumer):
-    async def connect(self):
+    TICKET_KIND = ws_tickets.KIND_WIDGET
+    session_token = None
+    session_id = None
+
+    async def legacy_connect(self):
         self.session_token = self.scope['url_route']['kwargs']['session_token']
         self.conv_id = self.scope['url_route']['kwargs']['conv_id']
         self.conversation = await self._get_visitor_conversation()
         if not self.conversation: await self.close(); return
-        self.group_name = f"chat_{self.conv_id}"
         await self.accept()
-        await self.channel_layer.group_add(self.group_name, self.channel_name)
+        await self.join_groups()
         self.authz_enabled = True
+
+    async def bind_ticket_identity(self, payload):
+        self.conv_id = self.scope['url_route']['kwargs']['conv_id']
+        self.session_id = payload['sub']
+        self.conversation = await self._get_visitor_conversation()
+        return self.conversation is not None
+
+    async def join_groups(self):
+        self.group_name = f"chat_{self.conv_id}"
+        await self.channel_layer.group_add(self.group_name, self.channel_name)
 
     @database_sync_to_async
     def _get_visitor_conversation(self):
         try:
-            session = get_valid_session(self.session_token)
-            if session is None:
-                return None
-            project = session.visitor.project
-            if not (project.is_active and project.workspace.is_active):
-                return None
-            return Conversation.objects.get(id=self.conv_id, visitor=session.visitor, type=Conversation.Type.CUSTOMER)
+            # legacy sockets are identified by the session token, ticket sockets by the session row
+            # (so they survive token rotation, but not revocation/expiry/project deactivation)
+            if self.session_token:
+                session = get_valid_session(self.session_token)
+            else:
+                session = get_valid_session_by_id(self.session_id)
+            return ws_access.visitor_conversation(session, self.conv_id)
         except Exception: return None
 
     async def is_still_authorized(self):
@@ -107,9 +129,6 @@ class WidgetChatConsumer(BaseChatConsumer):
 
     async def leave_groups(self):
         if hasattr(self, 'group_name'): await self.channel_layer.group_discard(self.group_name, self.channel_name)
-
-    async def disconnect(self, close_code):
-        await self.leave_groups()
 
     async def receive_json(self, content):
         msg_kind = content.get('type')
@@ -129,7 +148,7 @@ class WidgetChatConsumer(BaseChatConsumer):
         # cannot be forged mid-socket) rather than IP, so it isn't defeated
         # by shared/rotating IPs behind NAT or a reverse proxy.
         limited = await is_rate_limited(
-            'widget_ws_message', self.session_token,
+            'widget_ws_message', self.session_token or f'sid:{self.session_id}',
             settings.WIDGET_WS_MESSAGE_RATE_LIMIT, settings.WIDGET_WS_MESSAGE_RATE_WINDOW_SECONDS,
         )
         if limited:
@@ -162,17 +181,30 @@ class WidgetChatConsumer(BaseChatConsumer):
             MessageReceipt.objects.create(message=msg, visitor=self.conversation.visitor)
 
 class DashboardChatConsumer(OpsEventsMixin, BaseChatConsumer):
-    async def connect(self):
+    TICKET_KIND = ws_tickets.KIND_DASHBOARD_CHAT
+
+    async def legacy_connect(self):
         self.token = self.scope['url_route']['kwargs']['token']
         self.conv_id = self.scope['url_route']['kwargs']['conv_id']
         self.conversation = await self._get_user_conversation()
         if not self.conversation: await self.close(); return
+        await self.accept()
+        await self.join_groups()
+        self.authz_enabled = True
+        await self.after_authenticated()
+
+    async def bind_ticket_identity(self, payload):
+        self.conv_id = self.scope['url_route']['kwargs']['conv_id']
+        self.conversation = await self._conversation_for_user_id(payload['sub'])
+        return self.conversation is not None
+
+    async def join_groups(self):
         self.group_name = f"chat_{self.conv_id}"
         self.ops_group_name = f"chat_ops_{self.conv_id}"
-        await self.accept()
         await self.channel_layer.group_add(self.group_name, self.channel_name)
         await self.channel_layer.group_add(self.ops_group_name, self.channel_name)
-        self.authz_enabled = True
+
+    async def after_authenticated(self):
         is_assigned_operator = await self._touch_presence_and_check_assigned()
         if is_assigned_operator:
             branding = await self._build_branding()
@@ -183,20 +215,19 @@ class DashboardChatConsumer(OpsEventsMixin, BaseChatConsumer):
         try:
             access_token = AccessToken(self.token)
             user = User.objects.get(id=access_token['user_id'], is_active=True)
-            conv = self._conversation_for(user)
+            conv = ws_access.operator_conversation(user, self.conv_id)
             if conv:
                 self.user = user
             return conv
         except Exception: return None
 
-    def _conversation_for(self, user):
-        try:
-            return Conversation.objects.get(
-                id=self.conv_id, workspace__memberships__user=user, workspace__is_active=True,
-                type=Conversation.Type.CUSTOMER,
-            )
-        except Conversation.DoesNotExist:
-            return None
+    @database_sync_to_async
+    def _conversation_for_user_id(self, user_id):
+        user = User.objects.filter(id=user_id, is_active=True).first()
+        conv = ws_access.operator_conversation(user, self.conv_id) if user else None
+        if conv:
+            self.user = user
+        return conv
 
     @database_sync_to_async
     def _authorized_for_user(self):
@@ -204,7 +235,7 @@ class DashboardChatConsumer(OpsEventsMixin, BaseChatConsumer):
         # NOT the JWT: the token's own exp was enforced at connect time; a
         # long-lived socket must survive token expiry, not permission changes.
         user = User.objects.filter(id=self.user.id, is_active=True).first()
-        return bool(user and self._conversation_for(user))
+        return bool(user and ws_access.operator_conversation(user, self.conv_id))
 
     async def is_still_authorized(self):
         return await self._authorized_for_user()
@@ -221,9 +252,6 @@ class DashboardChatConsumer(OpsEventsMixin, BaseChatConsumer):
     async def leave_groups(self):
         if hasattr(self, 'group_name'): await self.channel_layer.group_discard(self.group_name, self.channel_name)
         if hasattr(self, 'ops_group_name'): await self.channel_layer.group_discard(self.ops_group_name, self.channel_name)
-
-    async def disconnect(self, close_code):
-        await self.leave_groups()
 
     async def receive_json(self, content):
         msg_kind = content.get('type')
@@ -266,55 +294,55 @@ class DashboardChatConsumer(OpsEventsMixin, BaseChatConsumer):
             MessageReceipt.objects.create(message=msg, user=self.user)
 
 class DashboardSupportConsumer(BaseChatConsumer):
-    async def connect(self):
+    TICKET_KIND = ws_tickets.KIND_SUPPORT
+
+    async def legacy_connect(self):
         self.token = self.scope['url_route']['kwargs']['token']
         self.conv_id = self.scope['url_route']['kwargs']['conv_id']
         self.conversation = await self._get_support_conversation()
         if not self.conversation: await self.close(); return
-        self.group_name = f"support_chat_{self.conv_id}"
         await self.accept()
-        await self.channel_layer.group_add(self.group_name, self.channel_name)
+        await self.join_groups()
         self.authz_enabled = True
 
-    def _support_conversation_for(self, user):
-        """The support conversation iff `user` is Owner/Admin of THIS workspace
-        or platform staff of THIS workspace's platform (and both are active)."""
-        conv = Conversation.objects.select_related('workspace__platform').filter(
-            id=self.conv_id, type=Conversation.Type.PLATFORM_SUPPORT,
-        ).first()
-        if not conv or not conv.workspace.is_active or not conv.workspace.platform.is_active:
-            return None
-        is_ws_admin = WorkspaceMembership.objects.filter(
-            user=user, workspace=conv.workspace, role__in=['WORKSPACE_OWNER', 'WORKSPACE_ADMIN']).exists()
-        is_pl_support = PlatformMembership.objects.filter(
-            user=user, platform=conv.workspace.platform,
-            role__in=['PLATFORM_OWNER', 'PLATFORM_ADMIN', 'PLATFORM_SUPPORT_AGENT']).exists()
-        return conv if (is_ws_admin or is_pl_support) else None
+    async def bind_ticket_identity(self, payload):
+        self.conv_id = self.scope['url_route']['kwargs']['conv_id']
+        self.conversation = await self._conversation_for_user_id(payload['sub'])
+        return self.conversation is not None
+
+    async def join_groups(self):
+        self.group_name = f"support_chat_{self.conv_id}"
+        await self.channel_layer.group_add(self.group_name, self.channel_name)
 
     @database_sync_to_async
     def _get_support_conversation(self):
         try:
             access_token = AccessToken(self.token)
             user = User.objects.get(id=access_token['user_id'], is_active=True)
-            conv = self._support_conversation_for(user)
+            conv = ws_access.support_conversation(user, self.conv_id)
             if conv:
                 self.user = user
             return conv
         except Exception: return None
 
     @database_sync_to_async
+    def _conversation_for_user_id(self, user_id):
+        user = User.objects.filter(id=user_id, is_active=True).first()
+        conv = ws_access.support_conversation(user, self.conv_id) if user else None
+        if conv:
+            self.user = user
+        return conv
+
+    @database_sync_to_async
     def _authorized_for_user(self):
         user = User.objects.filter(id=self.user.id, is_active=True).first()
-        return bool(user and self._support_conversation_for(user))
+        return bool(user and ws_access.support_conversation(user, self.conv_id))
 
     async def is_still_authorized(self):
         return await self._authorized_for_user()
 
     async def leave_groups(self):
         if hasattr(self, 'group_name'): await self.channel_layer.group_discard(self.group_name, self.channel_name)
-
-    async def disconnect(self, close_code):
-        await self.leave_groups()
 
     async def receive_json(self, content):
         msg_text = content.get('message', '').strip()
