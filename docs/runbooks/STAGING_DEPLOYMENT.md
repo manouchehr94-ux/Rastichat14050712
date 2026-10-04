@@ -183,10 +183,10 @@ those are unaffected by a project-name change and need no migration step.
 
 ## Known limitations
 
-- CORS/WebSocket-origin allowlists are explicit domain lists
-  (`CORS_ALLOWED_ORIGINS`), not wildcard/dynamic — adding a new
-  storefront domain requires editing `.env.staging` and restarting the
-  backend, not a self-serve step for arbitrary unknown embedding sites.
+- The *global* CORS/WebSocket-origin allowlist (`CORS_ALLOWED_ORIGINS`) is still an explicit environment list for the
+  dashboards, but widget endpoints now also accept the domains configured on active projects
+  (`Project.allowed_domains`, see `docs/runbooks/PROJECT_ALLOWED_DOMAINS.md`) — a new storefront domain no longer needs an
+  environment edit and restart, only a project setting.
 - Uploaded chat/KB attachments (`/media/...`) use the same
   unguessable-filename access model as local dev, not authenticated
   per-request access control — anyone with the exact URL can view a
