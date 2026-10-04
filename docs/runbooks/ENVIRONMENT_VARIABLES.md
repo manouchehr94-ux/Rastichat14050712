@@ -118,3 +118,11 @@ Default **off** (`false`). When off, the public `POST /api/v1/widget/init/` neve
 `external_id` can resume that customer's conversation) and logs a warning on every use. It exists solely as a temporary
 bridge — see `docs/runbooks/WIDGET_IDENTITY_MIGRATION.md`. Do not enable it on a deployment that stores real customer chats
 unless an embedding site cannot migrate yet and you accept that risk explicitly.
+
+### Guardrails around `WIDGET_ALLOW_UNVERIFIED_EXTERNAL_ID`
+
+- In `staging`/`production`, setting it to true **refuses to start** (`ImproperlyConfigured`) unless
+  `WIDGET_UNVERIFIED_EXTERNAL_ID_ACK=accept-spoofable-customer-identity` is also set — a stray or copied `.env` line cannot enable it.
+- Even when acknowledged, `manage.py check --deploy --fail-level WARNING --tag security` (the CI/deploy gate) reports
+  `visitors.W001` and fails, and every use logs `widget init used legacy unverified external_id lookup`.
+- Tests: `config/tests_settings_guardrails.py` (`test_unverified_external_id_*`).

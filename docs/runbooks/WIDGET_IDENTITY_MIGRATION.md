@@ -27,7 +27,8 @@ session for that customer's visitor and could read their conversation history. N
 ## Migration plan
 1. Deploy with the default (flag off). Verify guests and returning-session flows (tests below cover them).
 2. If a specific embedding site truly depends on the old lookup, enable `WIDGET_ALLOW_UNVERIFIED_EXTERNAL_ID=true` only for
-   the time needed, watch the warning log (`widget init used legacy unverified external_id lookup`), and treat that
+   the time needed (in staging/production this additionally requires `WIDGET_UNVERIFIED_EXTERNAL_ID_ACK=accept-spoofable-customer-identity`,
+   and the security deploy gate reports `visitors.W001` while it is on), watch the warning log (`widget init used legacy unverified external_id lookup`), and treat that
    deployment as spoofable meanwhile.
 3. Move to signed identity assertions (RastiSi server issues a short-lived signed token; chat validates signature, audience,
    expiry and one-time use, then maps the store and customer). Then `Visitor.external_id` is set only from a verified claim,

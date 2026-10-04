@@ -327,6 +327,24 @@ CHANNEL_LAYERS = {
 # assertions (see docs/runbooks/WIDGET_IDENTITY_MIGRATION.md). Every use logs
 # a warning.
 WIDGET_ALLOW_UNVERIFIED_EXTERNAL_ID = _env_bool('WIDGET_ALLOW_UNVERIFIED_EXTERNAL_ID', default=False)
+# Enabling the spoofable legacy lookup on a staging/production deployment must
+# be a deliberate, two-step decision, never an accident (a stray env line, a
+# copied .env): startup is refused unless the operator ALSO sets the
+# acknowledgement below. Even when acknowledged, `manage.py check --deploy
+# --tag security` (the CI/deploy gate) reports visitors.W001 on every run and
+# each use is logged (see visitors/views.py).
+WIDGET_UNVERIFIED_EXTERNAL_ID_ACK = os.environ.get('WIDGET_UNVERIFIED_EXTERNAL_ID_ACK', '').strip()
+WIDGET_UNVERIFIED_EXTERNAL_ID_ACK_VALUE = 'accept-spoofable-customer-identity'
+if (
+    IS_PRODUCTION_LIKE and WIDGET_ALLOW_UNVERIFIED_EXTERNAL_ID
+    and WIDGET_UNVERIFIED_EXTERNAL_ID_ACK != WIDGET_UNVERIFIED_EXTERNAL_ID_ACK_VALUE
+):
+    raise ImproperlyConfigured(
+        'WIDGET_ALLOW_UNVERIFIED_EXTERNAL_ID=1 lets anyone who knows or guesses a customer external_id read that '
+        'customer\'s conversation, and is refused when ENVIRONMENT is staging or production. If a documented migration '
+        'truly requires it, also set WIDGET_UNVERIFIED_EXTERNAL_ID_ACK=%s (see '
+        'docs/runbooks/WIDGET_IDENTITY_MIGRATION.md).' % WIDGET_UNVERIFIED_EXTERNAL_ID_ACK_VALUE
+    )
 WIDGET_WS_MESSAGE_RATE_LIMIT = int(os.environ.get('WIDGET_WS_MESSAGE_RATE_LIMIT', 30))
 WIDGET_WS_MESSAGE_RATE_WINDOW_SECONDS = int(os.environ.get('WIDGET_WS_MESSAGE_RATE_WINDOW_SECONDS', 60))
 

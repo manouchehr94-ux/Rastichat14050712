@@ -105,6 +105,29 @@ class StagingFailFastTests(SimpleTestCase):
         self.assertNotEqual(result.returncode, 0)
         self.assertIn('CORS_ALLOWED_ORIGINS', result.stderr)
 
+    def test_unverified_external_id_flag_without_ack_fails_startup(self):
+        result = run_check({'WIDGET_ALLOW_UNVERIFIED_EXTERNAL_ID': '1'})
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn('WIDGET_ALLOW_UNVERIFIED_EXTERNAL_ID', result.stderr)
+        self.assertIn('WIDGET_UNVERIFIED_EXTERNAL_ID_ACK', result.stderr)
+
+    def test_unverified_external_id_flag_with_wrong_ack_fails_startup(self):
+        result = run_check({'WIDGET_ALLOW_UNVERIFIED_EXTERNAL_ID': '1', 'WIDGET_UNVERIFIED_EXTERNAL_ID_ACK': 'yes'})
+        self.assertNotEqual(result.returncode, 0)
+
+    def test_unverified_external_id_flag_with_ack_starts_but_deploy_gate_flags_it(self):
+        env = {'WIDGET_ALLOW_UNVERIFIED_EXTERNAL_ID': '1',
+               'WIDGET_UNVERIFIED_EXTERNAL_ID_ACK': 'accept-spoofable-customer-identity'}
+        self.assertEqual(run_check(env).returncode, 0)  # acknowledged: allowed to start
+        gate = run_check(env, extra_args=['--deploy', '--fail-level', 'WARNING', '--tag', 'security'])
+        self.assertNotEqual(gate.returncode, 0)  # but the CI/deploy security gate goes red
+        self.assertIn('visitors.W001', gate.stderr + gate.stdout)
+
+    def test_unverified_external_id_flag_default_off_passes_deploy_gate(self):
+        gate = run_check({}, extra_args=['--deploy', '--fail-level', 'WARNING', '--tag', 'security'])
+        self.assertEqual(gate.returncode, 0, gate.stderr)
+        self.assertNotIn('visitors.W001', gate.stderr + gate.stdout)
+
     def test_invalid_environment_value_fails(self):
         result = run_check({'ENVIRONMENT': 'not-a-real-environment'})
         self.assertNotEqual(result.returncode, 0)
