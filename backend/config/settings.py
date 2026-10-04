@@ -109,6 +109,10 @@ if IS_PRODUCTION_LIKE and not CSRF_TRUSTED_ORIGINS:
         '(e.g. "https://operator-chat-staging.rastisi.ir,https://platform-chat-staging.rastisi.ir").'
     )
 
+# The widget sends its session credential in this header (instead of the URL) —
+# browsers only allow it on cross-origin calls if it is listed here.
+from corsheaders.defaults import default_headers as _cors_default_headers
+CORS_ALLOW_HEADERS = list(_cors_default_headers) + ['x-widget-session']
 CORS_ALLOWED_ORIGINS = _env_list('CORS_ALLOWED_ORIGINS')
 if IS_PRODUCTION_LIKE and not CORS_ALLOWED_ORIGINS:
     raise ImproperlyConfigured(
@@ -345,6 +349,13 @@ if (
         'truly requires it, also set WIDGET_UNVERIFIED_EXTERNAL_ID_ACK=%s (see '
         'docs/runbooks/WIDGET_IDENTITY_MIGRATION.md).' % WIDGET_UNVERIFIED_EXTERNAL_ID_ACK_VALUE
     )
+# Visitor (customer) session lifecycle — see visitors/sessions.py. A session is valid
+# until `expires_at` (sliding: renewed on use up to the absolute max age), until it is
+# revoked (logout) or its token is rotated. Expiry never deletes the Visitor or their
+# conversations; an expired session only stops granting access to them.
+VISITOR_SESSION_TTL_DAYS = int(os.environ.get('VISITOR_SESSION_TTL_DAYS', 30))
+VISITOR_SESSION_MAX_AGE_DAYS = int(os.environ.get('VISITOR_SESSION_MAX_AGE_DAYS', 180))
+VISITOR_SESSION_ROTATE_AFTER_HOURS = int(os.environ.get('VISITOR_SESSION_ROTATE_AFTER_HOURS', 24))
 WIDGET_WS_MESSAGE_RATE_LIMIT = int(os.environ.get('WIDGET_WS_MESSAGE_RATE_LIMIT', 30))
 WIDGET_WS_MESSAGE_RATE_WINDOW_SECONDS = int(os.environ.get('WIDGET_WS_MESSAGE_RATE_WINDOW_SECONDS', 60))
 
@@ -423,6 +434,7 @@ REST_FRAMEWORK = {
         'login': None if TESTING else os.environ.get('LOGIN_THROTTLE_RATE', '10/min'),
         'widget_start': None if TESTING else os.environ.get('WIDGET_START_THROTTLE_RATE', '20/min'),
         'widget_message': None if TESTING else os.environ.get('WIDGET_MESSAGE_THROTTLE_RATE', '60/min'),
+        'widget_session': None if TESTING else os.environ.get('WIDGET_SESSION_THROTTLE_RATE', '30/min'),
         'widget_rating': None if TESTING else os.environ.get('WIDGET_RATING_THROTTLE_RATE', '20/min'),
         'kb_feedback': None if TESTING else os.environ.get('KB_FEEDBACK_THROTTLE_RATE', '20/min'),
         'kb_search': None if TESTING else os.environ.get('KB_SEARCH_THROTTLE_RATE', '60/min'),

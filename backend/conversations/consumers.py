@@ -6,7 +6,7 @@ from rest_framework_simplejwt.tokens import AccessToken
 from django.contrib.auth import get_user_model
 from .models import Conversation, Message, MessageReceipt
 from .branding import build_widget_branding
-from visitors.models import VisitorSession
+from visitors.sessions import get_valid_session
 from workspaces.models import WorkspaceMembership
 from platforms.models import PlatformMembership
 from accounts.presence import touch_presence
@@ -91,7 +91,9 @@ class WidgetChatConsumer(BaseChatConsumer):
     @database_sync_to_async
     def _get_visitor_conversation(self):
         try:
-            session = VisitorSession.objects.get(token=self.session_token)
+            session = get_valid_session(self.session_token)
+            if session is None:
+                return None
             return Conversation.objects.get(id=self.conv_id, visitor=session.visitor, type=Conversation.Type.CUSTOMER)
         except Exception: return None
 
