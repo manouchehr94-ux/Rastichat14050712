@@ -1,0 +1,142 @@
+[
+  {
+    "file": "src/app/support/page.test.tsx",
+    "rule": "@typescript-eslint/no-explicit-any",
+    "line": 20
+  },
+  {
+    "file": "src/app/support/page.test.tsx",
+    "rule": "@typescript-eslint/no-explicit-any",
+    "line": 24
+  },
+  {
+    "file": "src/app/support/page.test.tsx",
+    "rule": "@typescript-eslint/no-explicit-any",
+    "line": 30
+  },
+  {
+    "file": "src/app/support/page.test.tsx",
+    "rule": "@typescript-eslint/no-explicit-any",
+    "line": 36
+  },
+  {
+    "file": "src/app/support/page.test.tsx",
+    "rule": "@typescript-eslint/no-explicit-any",
+    "line": 42
+  },
+  {
+    "file": "src/app/support/page.test.tsx",
+    "rule": "@typescript-eslint/no-explicit-any",
+    "line": 48
+  },
+  {
+    "file": "src/app/support/page.test.tsx",
+    "rule": "@typescript-eslint/no-explicit-any",
+    "line": 55
+  },
+  {
+    "file": "src/app/support/page.test.tsx",
+    "rule": "@typescript-eslint/no-explicit-any",
+    "line": 63
+  },
+  {
+    "file": "src/app/support/page.test.tsx",
+    "rule": "@typescript-eslint/no-explicit-any",
+    "line": 64
+  },
+  {
+    "file": "src/app/support/page.test.tsx",
+    "rule": "@typescript-eslint/no-explicit-any",
+    "line": 74
+  },
+  {
+    "file": "src/app/support/page.test.tsx",
+    "rule": "@typescript-eslint/no-explicit-any",
+    "line": 75
+  },
+  {
+    "file": "src/app/support/page.test.tsx",
+    "rule": "@typescript-eslint/no-explicit-any",
+    "line": 82
+  },
+  {
+    "file": "src/app/support/page.test.tsx",
+    "rule": "@typescript-eslint/no-explicit-any",
+    "line": 83
+  },
+  {
+    "file": "src/app/support/page.test.tsx",
+    "rule": "@typescript-eslint/no-explicit-any",
+    "line": 90
+  },
+  {
+    "file": "src/app/support/page.test.tsx",
+    "rule": "@typescript-eslint/no-explicit-any",
+    "line": 91
+  },
+  {
+    "file": "src/app/support/page.test.tsx",
+    "rule": "@typescript-eslint/no-explicit-any",
+    "line": 92
+  },
+  {
+    "file": "src/app/support/page.test.tsx",
+    "rule": "@typescript-eslint/no-explicit-any",
+    "line": 101
+  },
+  {
+    "file": "src/app/support/page.test.tsx",
+    "rule": "@typescript-eslint/no-explicit-any",
+    "line": 102
+  },
+  {
+    "file": "src/app/support/page.test.tsx",
+    "rule": "@typescript-eslint/no-explicit-any",
+    "line": 102
+  },
+  {
+    "file": "src/app/support/page.test.tsx",
+    "rule": "@typescript-eslint/no-explicit-any",
+    "line": 103
+  },
+  {
+    "file": "src/app/support/page.test.tsx",
+    "rule": "@typescript-eslint/no-explicit-any",
+    "line": 104
+  },
+  {
+    "file": "src/app/support/page.test.tsx",
+    "rule": "@typescript-eslint/no-explicit-any",
+    "line": 112
+  },
+  {
+    "file": "src/app/support/page.test.tsx",
+    "rule": "@typescript-eslint/no-explicit-any",
+    "line": 119
+  },
+  {
+    "file": "src/app/support/page.test.tsx",
+    "rule": "@typescript-eslint/no-explicit-any",
+    "line": 125
+  },
+  {
+    "file": "src/app/support/page.test.tsx",
+    "rule": "@typescript-eslint/no-explicit-any",
+    "line": 131
+  },
+  {
+    "file": "src/lib/api.test.ts",
+    "rule": "@typescript-eslint/no-explicit-any",
+    "line": 10
+  },
+  {
+    "file": "src/lib/api.test.ts",
+    "rule": "@typescript-eslint/no-explicit-any",
+    "line": 14
+  },
+  {
+    "file": "src/lib/api.ts",
+    "rule": "@typescript-eslint/no-explicit-any",
+    "line": 397
+  }
+]

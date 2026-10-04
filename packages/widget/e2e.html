@@ -1,0 +1,25 @@
+<!DOCTYPE html>
+<html lang="fa" dir="rtl">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>RastiChat Widget E2E Harness</title>
+    <style>body { margin: 0; padding: 0; }</style>
+</head>
+<body>
+    <div id="rasti-chat-widget"></div>
+    <script src="./dist/widget.iife.js"></script>
+    <script>
+        // Test-only harness: reads config from the query string so Playwright
+        // can point the widget at a freshly-seeded project/backend per run
+        // without hardcoding any environment-specific IDs into this file.
+        const params = new URLSearchParams(location.search);
+        window.RastiChat.init({
+            projectKey: params.get('projectKey'),
+            apiBase: params.get('apiBase') || undefined,
+            wsBase: params.get('wsBase') || undefined,
+            position: 'right',
+        });
+    </script>
+</body>
+</html>

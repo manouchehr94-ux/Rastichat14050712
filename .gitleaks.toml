@@ -1,0 +1,12 @@
+title = "RastiChat gitleaks config"
+
+# Extends (does not replace) gitleaks' built-in ~150-rule default ruleset —
+# real secrets everywhere else in the repo are still fully scanned for.
+[extend]
+useDefault = true
+
+[allowlist]
+description = "Deliberately fake, obviously-labeled test fixtures for Django settings-guardrail regression tests — never real credentials. A commit-history scanner (gitleaks scans `git log -p`, not just the current tree) can't be satisfied by fixing the file's current content alone once a flagged pattern has been part of any commit's diff; excluding this known, reviewed, test-only path is the standard way to handle a confirmed false positive without weakening the scanner for real secrets anywhere else."
+paths = [
+  '''backend/config/tests_settings_guardrails\.py''',
+]

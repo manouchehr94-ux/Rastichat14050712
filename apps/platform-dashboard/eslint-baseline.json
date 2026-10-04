@@ -1,0 +1,192 @@
+[
+  {
+    "file": "src/app/inbox/page.test.tsx",
+    "rule": "@typescript-eslint/no-explicit-any",
+    "line": 21
+  },
+  {
+    "file": "src/app/inbox/page.test.tsx",
+    "rule": "@typescript-eslint/no-explicit-any",
+    "line": 25
+  },
+  {
+    "file": "src/app/inbox/page.test.tsx",
+    "rule": "@typescript-eslint/no-explicit-any",
+    "line": 31
+  },
+  {
+    "file": "src/app/inbox/page.test.tsx",
+    "rule": "@typescript-eslint/no-explicit-any",
+    "line": 37
+  },
+  {
+    "file": "src/app/inbox/page.test.tsx",
+    "rule": "@typescript-eslint/no-explicit-any",
+    "line": 43
+  },
+  {
+    "file": "src/app/inbox/page.test.tsx",
+    "rule": "@typescript-eslint/no-explicit-any",
+    "line": 49
+  },
+  {
+    "file": "src/app/inbox/page.test.tsx",
+    "rule": "@typescript-eslint/no-explicit-any",
+    "line": 55
+  },
+  {
+    "file": "src/app/inbox/page.test.tsx",
+    "rule": "@typescript-eslint/no-explicit-any",
+    "line": 56
+  },
+  {
+    "file": "src/app/inbox/page.test.tsx",
+    "rule": "@typescript-eslint/no-explicit-any",
+    "line": 63
+  },
+  {
+    "file": "src/app/inbox/page.test.tsx",
+    "rule": "@typescript-eslint/no-explicit-any",
+    "line": 64
+  },
+  {
+    "file": "src/app/inbox/page.test.tsx",
+    "rule": "@typescript-eslint/no-explicit-any",
+    "line": 71
+  },
+  {
+    "file": "src/app/inbox/page.test.tsx",
+    "rule": "@typescript-eslint/no-explicit-any",
+    "line": 72
+  },
+  {
+    "file": "src/app/inbox/page.test.tsx",
+    "rule": "@typescript-eslint/no-explicit-any",
+    "line": 73
+  },
+  {
+    "file": "src/app/inbox/page.test.tsx",
+    "rule": "@typescript-eslint/no-explicit-any",
+    "line": 81
+  },
+  {
+    "file": "src/app/inbox/page.test.tsx",
+    "rule": "@typescript-eslint/no-explicit-any",
+    "line": 82
+  },
+  {
+    "file": "src/app/inbox/page.test.tsx",
+    "rule": "@typescript-eslint/no-explicit-any",
+    "line": 83
+  },
+  {
+    "file": "src/app/inbox/page.test.tsx",
+    "rule": "@typescript-eslint/no-explicit-any",
+    "line": 92
+  },
+  {
+    "file": "src/app/inbox/page.test.tsx",
+    "rule": "@typescript-eslint/no-explicit-any",
+    "line": 93
+  },
+  {
+    "file": "src/app/inbox/page.test.tsx",
+    "rule": "@typescript-eslint/no-explicit-any",
+    "line": 94
+  },
+  {
+    "file": "src/app/inbox/page.test.tsx",
+    "rule": "@typescript-eslint/no-explicit-any",
+    "line": 101
+  },
+  {
+    "file": "src/app/inbox/page.test.tsx",
+    "rule": "@typescript-eslint/no-explicit-any",
+    "line": 102
+  },
+  {
+    "file": "src/app/inbox/page.test.tsx",
+    "rule": "@typescript-eslint/no-explicit-any",
+    "line": 102
+  },
+  {
+    "file": "src/app/inbox/page.test.tsx",
+    "rule": "@typescript-eslint/no-explicit-any",
+    "line": 103
+  },
+  {
+    "file": "src/app/inbox/page.test.tsx",
+    "rule": "@typescript-eslint/no-explicit-any",
+    "line": 104
+  },
+  {
+    "file": "src/app/inbox/page.test.tsx",
+    "rule": "@typescript-eslint/no-explicit-any",
+    "line": 112
+  },
+  {
+    "file": "src/app/inbox/page.test.tsx",
+    "rule": "@typescript-eslint/no-explicit-any",
+    "line": 118
+  },
+  {
+    "file": "src/app/inbox/page.test.tsx",
+    "rule": "@typescript-eslint/no-explicit-any",
+    "line": 124
+  },
+  {
+    "file": "src/app/inbox/page.test.tsx",
+    "rule": "@typescript-eslint/no-explicit-any",
+    "line": 125
+  },
+  {
+    "file": "src/app/inbox/page.test.tsx",
+    "rule": "@typescript-eslint/no-explicit-any",
+    "line": 125
+  },
+  {
+    "file": "src/app/inbox/page.test.tsx",
+    "rule": "@typescript-eslint/no-explicit-any",
+    "line": 126
+  },
+  {
+    "file": "src/app/inbox/page.test.tsx",
+    "rule": "@typescript-eslint/no-explicit-any",
+    "line": 127
+  },
+  {
+    "file": "src/app/inbox/page.test.tsx",
+    "rule": "@typescript-eslint/no-explicit-any",
+    "line": 136
+  },
+  {
+    "file": "src/lib/api.test.ts",
+    "rule": "@typescript-eslint/no-explicit-any",
+    "line": 8
+  },
+  {
+    "file": "src/lib/api.test.ts",
+    "rule": "@typescript-eslint/no-explicit-any",
+    "line": 9
+  },
+  {
+    "file": "src/lib/api.test.ts",
+    "rule": "@typescript-eslint/no-explicit-any",
+    "line": 13
+  },
+  {
+    "file": "src/lib/api.test.ts",
+    "rule": "@typescript-eslint/no-explicit-any",
+    "line": 20
+  },
+  {
+    "file": "src/lib/api.test.ts",
+    "rule": "@typescript-eslint/no-explicit-any",
+    "line": 26
+  },
+  {
+    "file": "src/lib/api.ts",
+    "rule": "@typescript-eslint/no-explicit-any",
+    "line": 55
+  }
+]

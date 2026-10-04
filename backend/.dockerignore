@@ -1,0 +1,12 @@
+__pycache__/
+*.pyc
+*.pyo
+.git
+.env
+.env.*
+media/
+staticfiles/
+staging-credentials.txt
+test-staging-credentials.txt
+db.sqlite3
+*.sqlite3

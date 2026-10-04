@@ -1,0 +1,116 @@
+# RastiChat backend (REST API + WSS + admin + media/static). Substituted
+# by scripts/nginx/install-sites.sh from the environment — every __TOKEN__
+# below is filled in there; nothing here is a real domain.
+#
+# The Widget script (/widget.js, /widget/<version>/widget.js) is also
+# served from this SAME domain by proxying to the widget's own static-
+# Nginx container — kept on the backend's domain rather than inventing a
+# fourth "Rastisi host domain" beyond the three the spec names.
+
+server {
+    listen 80;
+    listen [::]:80;
+    server_name __BACKEND_DOMAIN__;
+
+    # Certbot's HTTP-01 challenge needs a plain-HTTP location that works
+    # BEFORE a certificate exists — see scripts/nginx/issue-certs.sh.
+    location /.well-known/acme-challenge/ {
+        root /var/www/rastichat-acme;
+    }
+
+    location / {
+        return 301 https://$host$request_uri;
+    }
+}
+
+server {
+    # The new standalone `http2 on;` directive requires nginx 1.25.1+;
+    # Ubuntu 24.04's official apt package ships nginx 1.24.0, which only
+    # understands http2 as a `listen` parameter — use that form for
+    # compatibility with the actual target OS's default package.
+    listen 443 ssl http2;
+    listen [::]:443 ssl http2;
+    server_name __BACKEND_DOMAIN__;
+
+    ssl_certificate     /etc/letsencrypt/live/__BACKEND_DOMAIN__/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/__BACKEND_DOMAIN__/privkey.pem;
+    include /etc/nginx/rastichat/snippets/ssl-params.conf;
+    include /etc/nginx/rastichat/snippets/security-headers.conf;
+
+    # Matches backend/config/settings.py's DATA_UPLOAD_MAX_MEMORY_SIZE
+    # default (20MB) — keep these two in sync; a body Nginx rejects never
+    # reaches Django's own (more specific, per-attachment-type) validation
+    # in conversations/media_validation.py.
+    client_max_body_size 20m;
+
+    gzip on;
+    gzip_types application/json application/javascript text/css;
+    gzip_min_length 1024;
+
+    access_log /var/log/nginx/rastichat-backend-access.log;
+    error_log  /var/log/nginx/rastichat-backend-error.log;
+
+    location /ws/ {
+        limit_req zone=rastichat_ws_connect burst=10 nodelay;
+        limit_conn rastichat_ws_conn 20;
+        proxy_pass http://127.0.0.1:__BACKEND_PORT__;
+        include /etc/nginx/rastichat/snippets/proxy-params.conf;
+        include /etc/nginx/rastichat/snippets/websocket-params.conf;
+    }
+
+    location = /api/v1/auth/login/ {
+        limit_req zone=rastichat_login burst=5 nodelay;
+        proxy_pass http://127.0.0.1:__BACKEND_PORT__;
+        include /etc/nginx/rastichat/snippets/proxy-params.conf;
+    }
+
+    # No caching for anything authenticated/dynamic — a shared/browser
+    # cache serving a stale or cross-tenant API response would be a real
+    # data leak, not just a staleness bug.
+    location /api/ {
+        limit_req zone=rastichat_general burst=40 nodelay;
+        add_header Cache-Control "no-store" always;
+        proxy_pass http://127.0.0.1:__BACKEND_PORT__;
+        include /etc/nginx/rastichat/snippets/proxy-params.conf;
+    }
+
+    location /admin/ {
+        limit_req zone=rastichat_general burst=40 nodelay;
+        add_header Cache-Control "no-store" always;
+        proxy_pass http://127.0.0.1:__BACKEND_PORT__;
+        include /etc/nginx/rastichat/snippets/proxy-params.conf;
+    }
+
+    # Health/readiness probes are polled frequently by the monitoring setup
+    # in docs/runbooks/MONITORING_RUNBOOK.md — exempt from the general rate
+    # limit so monitoring itself can never trip it.
+    location /api/v1/health/ {
+        proxy_pass http://127.0.0.1:__BACKEND_PORT__;
+        include /etc/nginx/rastichat/snippets/proxy-params.conf;
+    }
+
+    location = /widget.js {
+        proxy_pass http://127.0.0.1:__WIDGET_PORT__;
+        proxy_set_header Host $host;
+    }
+
+    location ~ ^/widget/ {
+        proxy_pass http://127.0.0.1:__WIDGET_PORT__;
+        proxy_set_header Host $host;
+    }
+
+    # Uploaded chat/KB attachments — unguessable-filename access control,
+    # same model as local dev (Django's DEBUG-only static() helper), not
+    # authenticated download. See "Known limitations" in
+    # docs/runbooks/STAGING_DEPLOYMENT.md for INTERNAL-visibility KB
+    # attachments specifically.
+    location /media/ {
+        alias __MEDIA_HOST_PATH__/;
+        add_header Cache-Control "private, max-age=3600";
+    }
+
+    location /static/ {
+        alias __STATIC_HOST_PATH__/;
+        add_header Cache-Control "public, max-age=31536000, immutable";
+    }
+}

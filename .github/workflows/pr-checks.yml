@@ -1,0 +1,325 @@
+name: PR checks
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+# A second push to the same PR cancels the still-running checks for the
+# first — no point finishing a check run against code that's already
+# superseded.
+concurrency:
+  group: pr-checks-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  backend:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:15-alpine
+        env:
+          POSTGRES_USER: rastichat
+          POSTGRES_PASSWORD: rastichat_ci_secret
+          POSTGRES_DB: rastichat_db
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U rastichat"
+          --health-interval 5s --health-timeout 5s --health-retries 10
+      redis:
+        image: redis:7-alpine
+        ports: ["6379:6379"]
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s --health-timeout 5s --health-retries 10
+    env:
+      DEBUG: "1"
+      SECRET_KEY: ci-only-insecure-key-not-used-anywhere-real
+      DB_HOST: localhost
+      DB_USER: rastichat
+      DB_PASSWORD: rastichat_ci_secret
+      DB_NAME: rastichat_db
+      REDIS_HOST: localhost
+    defaults:
+      run:
+        working-directory: backend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: backend/requirements-dev.txt
+      - run: pip install -r requirements-dev.txt
+      - name: manage.py check
+        run: python manage.py check
+      - name: manage.py check --deploy (informational — dev settings are expected to warn)
+        run: python manage.py check --deploy || true
+      - name: manage.py check --deploy under staging-like settings (blocking)
+        # Unlike the dev-mode run above, this actually exercises the
+        # settings.py guardrails a staging/production deploy would hit —
+        # a real regression here (e.g. someone reintroducing DEBUG=1 as a
+        # default, or dropping a security header) should fail the build,
+        # not just get logged. --fail-level WARNING --tag security is the
+        # exact command docker-entrypoint.sh's check-deploy subcommand
+        # runs (see config/tests_settings_guardrails.py for why both flags
+        # are required together, not just --fail-level WARNING alone).
+        # The secret is freshly random per run, not a fixed string —
+        # a fixed CI-only secret could accidentally sit exactly on
+        # security.W009's length/entropy threshold and never actually
+        # exercise this gate.
+        run: |
+          DJANGO_SECRET_KEY="$(python3 -c 'import secrets; print(secrets.token_urlsafe(48))')" \
+            python manage.py check --deploy --fail-level WARNING --tag security
+        env:
+          ENVIRONMENT: staging
+          DEBUG: "0"
+          ALLOWED_HOSTS: ci-staging-check.example.com
+          CSRF_TRUSTED_ORIGINS: https://ci-staging-check.example.com
+          CORS_ALLOWED_ORIGINS: https://ci-staging-check.example.com
+          MONITORING_TOKEN: ci-staging-check-monitoring-token-not-real
+      - name: Migration drift check
+        run: python manage.py makemigrations --check --dry-run
+      - name: Migrate
+        run: python manage.py migrate
+      - name: Test
+        run: python manage.py test --verbosity=2
+      - name: Bandit (static security scan, medium+ severity fails the build)
+        run: bandit -r . -x './*/tests*.py,./*/migrations/*' -ll
+      - name: pip-audit (dependency vulnerability scan, fails the build)
+        run: pip-audit -r requirements.txt
+
+  widget:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: packages/widget
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: packages/widget/package-lock.json
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm run lint
+      - run: npm run test -- --run
+      - run: npm run build
+      - name: npm audit (informational — remaining findings are dev-tooling-only)
+        # esbuild/vite/vite-node/vitest findings here are all dev-server/test-UI
+        # vulnerabilities in build/test tooling that never ships in the
+        # production bundle or runs with any network exposure in CI or
+        # production (only `npm run build`/`vitest run` execute here, never
+        # `vite dev`/`vitest --ui`) — verified by hand for every frontend
+        # package in this repo; a real runtime dependency finding (Next.js
+        # itself, previously flagged here until bumped to 16.3.0) is a
+        # different story and would need the same scrutiny, not a blanket
+        # `|| true`.
+        run: npm audit --audit-level=high || true
+
+  operator-dashboard:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: apps/operator-dashboard
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # Full history — the lint baseline gate diffs against the PR's
+          # base branch to decide which files must be fully lint-clean
+          # (touched by this PR) vs which pre-existing errors are still
+          # allowed (untouched legacy files); a shallow clone can't compute
+          # that diff.
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: apps/operator-dashboard/package-lock.json
+      - run: npm ci
+      - run: npm run typecheck
+      - name: eslint (informational — literal result, see lint:baseline for the actual gate)
+        run: npm run lint || true
+      - name: lint baseline/delta gate (blocking — fails on any new error, or any error in a file this PR touched)
+        run: npm run lint:baseline
+      - run: npm run test -- --run
+      - run: npm run build
+      - name: npm audit (informational — remaining findings are dev-tooling-only)
+        # esbuild/vite/vite-node/vitest findings here are all dev-server/test-UI
+        # vulnerabilities in build/test tooling that never ships in the
+        # production bundle or runs with any network exposure in CI or
+        # production (only `npm run build`/`vitest run` execute here, never
+        # `vite dev`/`vitest --ui`) — verified by hand for every frontend
+        # package in this repo; a real runtime dependency finding (Next.js
+        # itself, previously flagged here until bumped to 16.3.0) is a
+        # different story and would need the same scrutiny, not a blanket
+        # `|| true`.
+        run: npm audit --audit-level=high || true
+
+  platform-dashboard:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: apps/platform-dashboard
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: apps/platform-dashboard/package-lock.json
+      - run: npm ci
+      - run: npm run typecheck
+      - name: eslint (informational — literal result, see lint:baseline for the actual gate)
+        run: npm run lint || true
+      - name: lint baseline/delta gate (blocking — fails on any new error, or any error in a file this PR touched)
+        run: npm run lint:baseline
+      - run: npm run test -- --run
+      - run: npm run build
+      - name: npm audit (informational — remaining findings are dev-tooling-only)
+        # esbuild/vite/vite-node/vitest findings here are all dev-server/test-UI
+        # vulnerabilities in build/test tooling that never ships in the
+        # production bundle or runs with any network exposure in CI or
+        # production (only `npm run build`/`vitest run` execute here, never
+        # `vite dev`/`vitest --ui`) — verified by hand for every frontend
+        # package in this repo; a real runtime dependency finding (Next.js
+        # itself, previously flagged here until bumped to 16.3.0) is a
+        # different story and would need the same scrutiny, not a blanket
+        # `|| true`.
+        run: npm audit --audit-level=high || true
+
+  secret-scan:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: gitleaks
+        uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  docker-build:
+    # Builds all 4 production images for real and proves the staging
+    # Compose stack actually works end to end: config validation, the
+    # deploy-time Django security check, migrations, collectstatic, the
+    # backend container's fixed non-root UID, that it can write into its
+    # own bind-mounted media volume, that a container recreate doesn't
+    # lose what it wrote, and that Nginx (a real one, installed on the
+    # runner) can read what landed on the host paths. This is the same
+    # sequence scripts/staging/deploy.sh runs on a real VPS, using a
+    # generated CI-only env file (scripts/staging/generate-ci-env.sh) so
+    # nothing here depends on a committed .env.staging.
+    runs-on: ubuntu-latest
+    env:
+      CI_ROOT: /tmp/rastichat-ci
+      ENV_FILE: /tmp/rastichat-ci/.env.staging
+      COMPOSE: docker compose -f docker-compose.staging.yml --env-file /tmp/rastichat-ci/.env.staging
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Generate CI env file
+        run: |
+          mkdir -p "$CI_ROOT/media" "$CI_ROOT/static" "$CI_ROOT/backups"
+          scripts/staging/generate-ci-env.sh "$ENV_FILE" "$CI_ROOT/media" "$CI_ROOT/static" "$CI_ROOT/backups"
+
+      - name: Validate docker-compose.staging.yml
+        run: $COMPOSE config --quiet
+
+      - name: Fix media/static permissions (same script deploy.sh uses)
+        run: sudo scripts/staging/fix-permissions.sh "$CI_ROOT/media" "$CI_ROOT/static" 10001 10001
+
+      - name: Build all 4 production images
+        run: $COMPOSE build --build-arg GIT_SHA="${{ github.sha }}"
+
+      - name: Start db/redis, wait for healthy
+        run: |
+          $COMPOSE up -d db redis
+          for i in $(seq 1 30); do
+            db_health="$($COMPOSE ps db --format '{{.Health}}' 2>/dev/null || echo '')"
+            redis_health="$($COMPOSE ps redis --format '{{.Health}}' 2>/dev/null || echo '')"
+            [ "$db_health" = "healthy" ] && [ "$redis_health" = "healthy" ] && break
+            sleep 2
+            if [ "$i" -eq 30 ]; then echo "db/redis did not become healthy" >&2; exit 1; fi
+          done
+
+      - name: Deploy-time Django security check (check --deploy --fail-level WARNING)
+        run: $COMPOSE run --rm backend check-deploy
+
+      - name: Run migrations
+        run: $COMPOSE run --rm backend migrate
+
+      - name: Collect static files
+        run: $COMPOSE run --rm backend collectstatic
+
+      - name: Verify collected static files actually landed on the host mount
+        run: test -f "$CI_ROOT/static/admin/css/base.css"
+
+      - name: Deploy full stack
+        run: $COMPOSE up -d
+
+      - name: Dump backend logs if the stack failed to come up
+        if: failure()
+        run: |
+          $COMPOSE ps
+          echo "--- backend logs ---"
+          $COMPOSE logs backend || true
+
+      - name: Wait for backend readiness
+        run: |
+          for i in $(seq 1 30); do
+            curl -fsS http://127.0.0.1:8100/api/v1/health/ready/ >/dev/null 2>&1 && break
+            sleep 2
+            if [ "$i" -eq 30 ]; then echo "backend did not become ready" >&2; exit 1; fi
+          done
+
+      - name: Verify the backend container runs as the expected non-root UID
+        run: |
+          actual="$($COMPOSE exec -T backend id -u)"
+          if [ "$actual" != "10001" ]; then echo "expected UID 10001, got $actual" >&2; exit 1; fi
+
+      - name: Verify the backend can write into its mounted media volume as that non-root user
+        run: |
+          $COMPOSE exec -T backend sh -c 'echo ci-write-test > /app/media/ci-write-test.txt'
+          test -f "$CI_ROOT/media/ci-write-test.txt"
+
+      - name: Recreate the backend container, verify the written file persists
+        run: |
+          $COMPOSE up -d --force-recreate backend
+          for i in $(seq 1 30); do
+            curl -fsS http://127.0.0.1:8100/api/v1/health/ready/ >/dev/null 2>&1 && break
+            sleep 2
+            if [ "$i" -eq 30 ]; then echo "backend did not become ready after recreate" >&2; exit 1; fi
+          done
+          test -f "$CI_ROOT/media/ci-write-test.txt"
+
+      - name: Verify a real Nginx can read the media/static host paths
+        run: |
+          sudo apt-get update -y >/dev/null
+          sudo apt-get install -y nginx >/dev/null
+          sudo tee /etc/nginx/conf.d/rastichat-ci-media.conf > /dev/null <<NGINX
+          server {
+            listen 8888;
+            location /media/ { alias ${CI_ROOT}/media/; }
+            location /static/ { alias ${CI_ROOT}/static/; }
+          }
+          NGINX
+          sudo nginx -t
+          sudo systemctl restart nginx
+          media_code="$(curl -fsS -o /dev/null -w '%{http_code}' http://127.0.0.1:8888/media/ci-write-test.txt)"
+          static_code="$(curl -fsS -o /dev/null -w '%{http_code}' http://127.0.0.1:8888/static/admin/css/base.css)"
+          echo "media -> ${media_code}, static -> ${static_code}"
+          [ "$media_code" = "200" ] && [ "$static_code" = "200" ]
+
+      - name: Tear down
+        # `-v` is only ever safe here: this is disposable CI infrastructure
+        # torn down at the end of every run, not a real deployment —
+        # scripts/staging/rollback.sh/deploy.sh never use `down -v` for
+        # exactly the opposite reason (it would destroy real Postgres/
+        # Redis/media data).
+        if: always()
+        run: $COMPOSE down -v || true

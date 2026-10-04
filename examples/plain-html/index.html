@@ -1,0 +1,25 @@
+<!DOCTYPE html>
+<html lang="fa" dir="rtl">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>RastiChat Demo</title>
+    <style>
+        body { font-family: Tahoma, sans-serif; padding: 50px; text-align: center; }
+    </style>
+</head>
+<body>
+    <h1>وب‌سایت نمونه RastiChat</h1>
+    <p>برای تست ودجت، روی آیکون چت کلیک کنید.</p>
+    
+    <!-- RastiChat Widget -->
+    <script src="/packages/widget/dist/widget.iife.js"></script>
+    <script>
+        RastiChat.init({
+            projectKey: "YOUR_PUBLIC_PROJECT_UUID",
+            position: "right",
+            primaryColor: "#2563eb"
+        });
+    </script>
+</body>
+</html>

@@ -1,0 +1,17 @@
+﻿Project: RastiChat
+Baseline: Phase 1 Stable
+
+Approved Modules:
+- Customer Chat
+- Platform Support Backend
+- Platform Support UI
+
+Backend Tests:
+50 Passed
+
+Frontend:
+Workspace UI Approved
+Platform UI Approved
+
+Manual Browser Verification:
+Pending

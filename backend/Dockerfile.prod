@@ -1,0 +1,72 @@
+# Production/staging backend image. Kept separate from the existing
+# `Dockerfile` (used by the dev docker-compose.yml, which bind-mounts source
+# and needs build tooling for iterative local work) so neither workflow has
+# to compromise for the other.
+#
+# Two stages: `builder` has the compiler toolchain needed to build
+# psycopg2's C extension, `runtime` only has the shared libraries actually
+# needed at run time (libpq5, not libpq-dev/build-essential/gcc) — keeps
+# the shipped image smaller and without a C compiler an attacker who gets
+# code execution inside the container could otherwise use to build tools.
+
+FROM python:3.11-slim AS builder
+ENV PYTHONUNBUFFERED=1 PYTHONDONTWRITEBYTECODE=1 PIP_NO_CACHE_DIR=1
+WORKDIR /build
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends build-essential libpq-dev \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN python -m venv /opt/venv
+ENV PATH="/opt/venv/bin:$PATH"
+
+COPY requirements.txt .
+RUN pip install --upgrade pip && pip install -r requirements.txt
+
+
+FROM python:3.11-slim AS runtime
+ENV PYTHONUNBUFFERED=1 PYTHONDONTWRITEBYTECODE=1 PATH="/opt/venv/bin:$PATH"
+WORKDIR /app
+
+# Lets `docker inspect`/scripts/staging/status.sh and rollback.sh answer
+# "which commit is this image actually running" without needing a
+# separate side-channel — scripts/staging/deploy.sh passes the real value.
+ARG GIT_SHA=unknown
+LABEL org.opencontainers.image.revision="${GIT_SHA}"
+
+# Fixed, deterministic UID/GID (not whatever `useradd --system` happens to
+# auto-assign) — MEDIA_HOST_PATH/STATIC_HOST_PATH are host bind mounts, so
+# the container's user must match ownership scripts/staging/deploy.sh sets
+# up on the host side (see its "Fix media/static permissions" step) or every
+# write to /app/media (image/voice/KB-attachment upload) fails with EACCES.
+# Overridable via --build-arg for a host where 10001 is already taken; the
+# default here and the default in .env.staging.example/.env.production.example
+# (RASTICHAT_UID/RASTICHAT_GID) must be kept in sync.
+ARG RASTICHAT_UID=10001
+ARG RASTICHAT_GID=10001
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends libpq5 curl \
+    && rm -rf /var/lib/apt/lists/* \
+    && groupadd --system --gid "${RASTICHAT_GID}" rastichat \
+    && useradd --system --uid "${RASTICHAT_UID}" --gid rastichat --home /app --shell /usr/sbin/nologin rastichat
+
+COPY --from=builder /opt/venv /opt/venv
+COPY . /app
+
+RUN mkdir -p /app/media /app/staticfiles \
+    && chmod +x /app/docker-entrypoint.sh /app/docker-scheduler-loop.sh \
+    && chown -R rastichat:rastichat /app
+
+USER rastichat
+
+# Nginx (or another orchestrator) polls this to decide whether to route
+# traffic here — see common/views.py:ReadinessView, which reports
+# not-ready (503) rather than crashing when the DB/Redis dependency it
+# checks is unreachable.
+HEALTHCHECK --interval=15s --timeout=5s --start-period=20s --retries=3 \
+    CMD curl -fsS "http://127.0.0.1:${PORT:-8000}/api/v1/health/live/" || exit 1
+
+EXPOSE 8000
+ENTRYPOINT ["/app/docker-entrypoint.sh"]
+CMD ["web"]

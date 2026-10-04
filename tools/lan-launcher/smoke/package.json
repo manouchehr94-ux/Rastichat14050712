@@ -1,0 +1,12 @@
+{
+  "name": "rastichat-lan-smoke",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Automated LAN functional smoke test, driven by RastiChat-LAN-Manager.ps1's `smoke` command against the real running LAN URLs. Do not run manually without LAN_WIDGET_URL and LAN_OPERATOR_URL set.",
+  "scripts": {
+    "test": "playwright test"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.48.0"
+  }
+}

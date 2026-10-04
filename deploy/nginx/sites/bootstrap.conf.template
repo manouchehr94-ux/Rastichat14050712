@@ -1,0 +1,23 @@
+# Minimal, certificate-free HTTP-only config used ONLY before a domain's
+# certificate exists — the full backend.conf.template/*-dashboard.conf.template
+# files reference `ssl_certificate` paths that don't exist yet on a brand
+# new domain, and `nginx -t` fails to load a config that references a
+# missing certificate file, so the real (443-serving) config can't be
+# installed until Certbot has already run once. Certbot's own HTTP-01
+# webroot challenge needs Nginx serving *something* on :80 first — this
+# breaks that chicken-and-egg: install this, issue the cert against it,
+# then install-sites.sh replaces it with the full config.
+server {
+    listen 80;
+    listen [::]:80;
+    server_name __DOMAIN__;
+
+    location /.well-known/acme-challenge/ {
+        root /var/www/rastichat-acme;
+    }
+
+    location / {
+        return 200 "RastiChat: certificate not yet issued for this domain.\n";
+        add_header Content-Type text/plain;
+    }
+}

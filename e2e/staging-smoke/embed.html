@@ -1,0 +1,31 @@
+<!DOCTYPE html>
+<html lang="fa" dir="rtl">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>RastiChat Widget — staging smoke embed</title>
+    <style>body { margin: 0; padding: 0; }</style>
+</head>
+<body>
+    <!-- Loads the widget from the REAL staging widget URL (never a local
+    dist/ path) — this is the same <script src="..."> embed a genuine
+    customer site would use, just with the src filled in from the query
+    string instead of hardcoded, so this one file works against any
+    environment the smoke suite is pointed at. -->
+    <div id="rasti-chat-widget"></div>
+    <script>
+        const params = new URLSearchParams(location.search);
+        const s = document.createElement('script');
+        s.src = params.get('widgetUrl');
+        s.onload = () => {
+            window.RastiChat.init({
+                projectKey: params.get('projectKey'),
+                apiBase: params.get('apiBase'),
+                wsBase: params.get('wsBase'),
+                position: 'right',
+            });
+        };
+        document.head.appendChild(s);
+    </script>
+</body>
+</html>

@@ -1,0 +1,278 @@
+# Staging/production Compose stack. Contrast with the existing
+# docker-compose.yml (dev only): no bind mounts, no `next dev`/`vite`/
+# `runserver`, every service builds an immutable image, Postgres/Redis are
+# never published to the host's public interface, and every published port
+# binds to 127.0.0.1 only — this stack assumes a host-level Nginx (already
+# running the VPS's other site) terminates TLS and reverse-proxies to these
+# loopback-only ports. See docker/nginx/ + docs/runbooks/STAGING_DEPLOYMENT.md
+# for the Nginx half of this.
+#
+# All host-side ports and every credential are environment-driven (see
+# .env.staging.example) — nothing here hardcodes a real domain or secret.
+#
+# Usage:
+#   docker compose -f docker-compose.staging.yml --env-file .env.staging build
+#   docker compose -f docker-compose.staging.yml --env-file .env.staging up -d
+#   docker compose -f docker-compose.staging.yml --env-file .env.staging ps
+#
+# Pinned project name (rather than letting Compose derive one from the
+# checkout directory's basename) — named-volume identity (postgres_data,
+# redis_data) must stay stable across redeploys regardless of what the repo
+# happens to be checked out into. Override via COMPOSE_PROJECT_NAME in the
+# env file so staging and production (this same file, different env file)
+# never collide if ever run on the same host. See
+# docs/runbooks/STAGING_DEPLOYMENT.md "Compose project name" for the
+# one-time migration this implies for an already-running installation.
+name: ${COMPOSE_PROJECT_NAME:-rastichat-staging}
+
+services:
+  db:
+    image: postgres:15-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${DB_USER:-rastichat}
+      POSTGRES_PASSWORD: ${DB_PASSWORD:?DB_PASSWORD must be set}
+      POSTGRES_DB: ${DB_NAME:-rastichat_db}
+    # No `ports:` — reachable only from other containers on this Compose
+    # network, never from the host's public interface.
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${DB_USER:-rastichat} -d ${DB_NAME:-rastichat_db}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    deploy:
+      resources:
+        limits:
+          cpus: "${DB_CPU_LIMIT:-1.0}"
+          memory: ${DB_MEM_LIMIT:-512M}
+    networks: [internal]
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    # appendonly persistence: Channels' Redis layer is not just a cache
+    # here — a hard restart mid-conversation losing the last few seconds of
+    # in-flight WS routing state is an acceptable, documented tradeoff (see
+    # docs/runbooks/MONITORING_RUNBOOK.md "Redis restart" section); losing
+    # everything on every restart is not.
+    command: >
+      sh -c 'if [ -n "$$REDIS_PASSWORD" ]; then
+        exec redis-server --appendonly yes --requirepass "$$REDIS_PASSWORD";
+      else
+        exec redis-server --appendonly yes;
+      fi'
+    environment:
+      REDIS_PASSWORD: ${REDIS_PASSWORD:-}
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD-SHELL", "redis-cli ${REDIS_PASSWORD:+-a $$REDIS_PASSWORD} --no-auth-warning ping | grep -q PONG"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    deploy:
+      resources:
+        limits:
+          cpus: "${REDIS_CPU_LIMIT:-0.5}"
+          memory: ${REDIS_MEM_LIMIT:-256M}
+    networks: [internal]
+
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile.prod
+      args:
+        # Must match whatever scripts/staging/deploy.sh chowns
+        # MEDIA_HOST_PATH/STATIC_HOST_PATH to on the host — same env var,
+        # same default, on both sides (see deploy.sh's "Fix permissions" step).
+        RASTICHAT_UID: ${RASTICHAT_UID:-10001}
+        RASTICHAT_GID: ${RASTICHAT_GID:-10001}
+    image: rastichat-backend:${IMAGE_TAG:-staging}
+    restart: unless-stopped
+    command: ["web"]
+    env_file: ["${ENV_FILE:-.env.staging}"]
+    environment:
+      DB_HOST: db
+      REDIS_HOST: redis
+    depends_on:
+      db: {condition: service_healthy}
+      redis: {condition: service_healthy}
+    ports:
+      - "127.0.0.1:${BACKEND_PORT:-8100}:8000"
+    volumes:
+      - media_data:/app/media
+      - static_data:/app/staticfiles
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8000/api/v1/health/live/"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+    deploy:
+      resources:
+        limits:
+          cpus: "${BACKEND_CPU_LIMIT:-1.5}"
+          memory: ${BACKEND_MEM_LIMIT:-768M}
+    networks: [internal]
+
+  automation-worker:
+    image: rastichat-backend:${IMAGE_TAG:-staging}
+    restart: unless-stopped
+    command: ["/app/docker-scheduler-loop.sh", "automation-worker", "${AUTOMATION_WORKER_INTERVAL_SECONDS:-30}"]
+    env_file: ["${ENV_FILE:-.env.staging}"]
+    environment:
+      DB_HOST: db
+      REDIS_HOST: redis
+    depends_on:
+      db: {condition: service_healthy}
+      redis: {condition: service_healthy}
+      backend: {condition: service_healthy}
+    volumes:
+      - media_data:/app/media
+    healthcheck:
+      # Heartbeat file is touched at the end of every cycle (see
+      # docker-scheduler-loop.sh) — a live-but-stuck process (hung DB query,
+      # deadlock) stops updating it and correctly flips this unhealthy well
+      # before AUTOMATION_WORKER_INTERVAL_SECONDS * retries would otherwise
+      # suggest.
+      test: ["CMD-SHELL", "test $$(( $(date +%s) - $$(cat /tmp/scheduler-heartbeat 2>/dev/null || echo 0) )) -lt $$(( ${AUTOMATION_WORKER_INTERVAL_SECONDS:-30} * 5 ))"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+    deploy:
+      resources:
+        limits:
+          cpus: "${WORKER_CPU_LIMIT:-0.5}"
+          memory: ${WORKER_MEM_LIMIT:-256M}
+    networks: [internal]
+
+  sla-worker:
+    image: rastichat-backend:${IMAGE_TAG:-staging}
+    restart: unless-stopped
+    command: ["/app/docker-scheduler-loop.sh", "sla-worker", "${SLA_WORKER_INTERVAL_SECONDS:-60}"]
+    env_file: ["${ENV_FILE:-.env.staging}"]
+    environment:
+      DB_HOST: db
+      REDIS_HOST: redis
+    depends_on:
+      db: {condition: service_healthy}
+      redis: {condition: service_healthy}
+      backend: {condition: service_healthy}
+    healthcheck:
+      test: ["CMD-SHELL", "test $$(( $(date +%s) - $$(cat /tmp/scheduler-heartbeat 2>/dev/null || echo 0) )) -lt $$(( ${SLA_WORKER_INTERVAL_SECONDS:-60} * 5 ))"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+    deploy:
+      resources:
+        limits:
+          cpus: "${WORKER_CPU_LIMIT:-0.5}"
+          memory: ${WORKER_MEM_LIMIT:-256M}
+    networks: [internal]
+
+  operator-dashboard:
+    build:
+      context: ./apps/operator-dashboard
+      dockerfile: ../../docker/operator-dashboard.Dockerfile
+      args:
+        NEXT_PUBLIC_API_BASE_URL: ${NEXT_PUBLIC_API_BASE_URL:?NEXT_PUBLIC_API_BASE_URL must be set}
+        NEXT_PUBLIC_WS_BASE_URL: ${NEXT_PUBLIC_WS_BASE_URL:?NEXT_PUBLIC_WS_BASE_URL must be set}
+    image: rastichat-operator-dashboard:${IMAGE_TAG:-staging}
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:${OPERATOR_PORT:-3100}:3000"
+    depends_on:
+      backend: {condition: service_healthy}
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3000').then(r=>process.exit(r.status<500?0:1)).catch(()=>process.exit(1))"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
+    deploy:
+      resources:
+        limits:
+          cpus: "${FRONTEND_CPU_LIMIT:-0.5}"
+          memory: ${FRONTEND_MEM_LIMIT:-256M}
+    networks: [internal]
+
+  platform-dashboard:
+    build:
+      context: ./apps/platform-dashboard
+      dockerfile: ../../docker/platform-dashboard.Dockerfile
+      args:
+        NEXT_PUBLIC_API_BASE_URL: ${NEXT_PUBLIC_API_BASE_URL:?NEXT_PUBLIC_API_BASE_URL must be set}
+        NEXT_PUBLIC_WS_BASE_URL: ${NEXT_PUBLIC_WS_BASE_URL:?NEXT_PUBLIC_WS_BASE_URL must be set}
+    image: rastichat-platform-dashboard:${IMAGE_TAG:-staging}
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:${PLATFORM_PORT:-3101}:3000"
+    depends_on:
+      backend: {condition: service_healthy}
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3000').then(r=>process.exit(r.status<500?0:1)).catch(()=>process.exit(1))"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
+    deploy:
+      resources:
+        limits:
+          cpus: "${FRONTEND_CPU_LIMIT:-0.5}"
+          memory: ${FRONTEND_MEM_LIMIT:-256M}
+    networks: [internal]
+
+  widget:
+    build:
+      context: ./packages/widget
+      dockerfile: ../../docker/widget.Dockerfile
+      args:
+        WIDGET_VERSION: ${IMAGE_TAG:-dev}
+    image: rastichat-widget:${IMAGE_TAG:-staging}
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:${WIDGET_PORT:-8180}:8080"
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:8080/healthz"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    deploy:
+      resources:
+        limits:
+          cpus: "${FRONTEND_CPU_LIMIT:-0.25}"
+          memory: ${WIDGET_MEM_LIMIT:-64M}
+    networks: [internal]
+
+networks:
+  internal:
+    driver: bridge
+
+volumes:
+  postgres_data:
+  redis_data:
+  # Bind-mounted (not a plain Docker-managed volume) so host-level Nginx
+  # can serve /media/ and /static/ directly — Django's DEBUG-only static-
+  # file helpers (django.contrib.staticfiles' runserver integration and
+  # config/urls.py's `if settings.DEBUG: ... static(MEDIA_URL, ...)`) are
+  # both inert with DEBUG=0, so nothing else would ever serve these paths
+  # in staging/production. Paths configurable so they can live wherever
+  # the VPS's disk layout puts persistent app data; scripts/staging/deploy.sh
+  # creates them before first `docker compose up`.
+  media_data:
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: ${MEDIA_HOST_PATH:-/opt/rastichat/media}
+  static_data:
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: ${STATIC_HOST_PATH:-/opt/rastichat/staticfiles}

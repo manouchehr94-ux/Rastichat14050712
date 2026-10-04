@@ -1,0 +1,115 @@
+@import "tailwindcss";
+
+/*
+ * RastiChat design tokens — canonical values documented in
+ * docs/product/DESIGN_TOKENS.md. Mirrored (not shared via a build-time
+ * package, since this repo has no npm workspace linking) in
+ * packages/widget/src/main.ts. Keep the two in sync.
+ */
+:root {
+  --background: #ffffff;
+  --foreground: #2C211A;
+
+  --color-cream: #FAF3EA;
+  --color-cream-soft: #F1E4D3;
+  --color-terracotta: #BC5A38;
+  --color-terracotta-2: #A1492A;
+  --color-terracotta-soft: #F3DCC9;
+  --color-terracotta-tint: #FBEEE4;
+  --color-gold: #C2954A;
+  --color-gold-soft: #EBD9B6;
+  --color-success: #5E8A56;
+  --color-success-soft: #E4EEDF;
+  --color-danger: #C0504A;
+  --color-line: #ECDCC8;
+}
+
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --font-sans: var(--font-vazirmatn), Tahoma, Arial, sans-serif;
+  --font-mono: var(--font-geist-mono);
+
+  --color-cream: var(--color-cream);
+  --color-cream-soft: var(--color-cream-soft);
+  --color-terracotta: var(--color-terracotta);
+  --color-terracotta-2: var(--color-terracotta-2);
+  --color-terracotta-soft: var(--color-terracotta-soft);
+  --color-terracotta-tint: var(--color-terracotta-tint);
+  --color-gold: var(--color-gold);
+  --color-gold-soft: var(--color-gold-soft);
+  --color-success: var(--color-success);
+  --color-success-soft: var(--color-success-soft);
+  --color-danger: var(--color-danger);
+  --color-line: var(--color-line);
+}
+
+body {
+  background: var(--background);
+  color: var(--foreground);
+  font-family: var(--font-sans);
+}
+
+/*
+ * Mobile form controls:
+ * iOS Safari automatically zooms focused editable controls when their
+ * computed font-size is below 16px. Keep desktop sizing untouched while
+ * guaranteeing >=16px on phone-sized viewports. Do not disable user zoom.
+ */
+html {
+  -webkit-text-size-adjust: 100%;
+}
+
+html,
+body {
+  width: 100%;
+  max-width: 100%;
+  overflow-x: hidden;
+}
+
+button,
+input,
+textarea,
+select {
+  font: inherit;
+}
+
+@media (max-width: 767px) {
+  input:not([type="checkbox"]):not([type="radio"]):not([type="file"]),
+  textarea,
+  select,
+  [contenteditable="true"] {
+    font-size: 16px !important;
+  }
+}
+
+/*
+ * iOS/WebKit keyboard viewport support.
+ * Use the dynamic viewport on mobile so the chat composer remains visible
+ * above the software keyboard. Manual zoom remains fully available.
+ */
+@media (max-width: 767px) {
+  html,
+  body {
+    height: 100%;
+  }
+
+  body {
+    min-height: 100dvh;
+    overscroll-behavior: none;
+  }
+
+  .rastichat-mobile-viewport {
+    height: 100dvh;
+    min-height: 0;
+    overflow: hidden;
+  }
+}
+
+@supports not (height: 100dvh) {
+  @media (max-width: 767px) {
+    .rastichat-mobile-viewport {
+      height: 100vh;
+    }
+  }
+}

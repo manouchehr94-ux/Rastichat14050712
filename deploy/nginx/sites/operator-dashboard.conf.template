@@ -1,0 +1,53 @@
+# RastiChat Operator Dashboard (Next.js). REST/WSS calls go directly to
+# __BACKEND_DOMAIN__ from the browser (see NEXT_PUBLIC_API_BASE_URL/
+# NEXT_PUBLIC_WS_BASE_URL baked in at image build time) — this domain only
+# ever serves the dashboard's own HTML/JS/CSS.
+
+server {
+    listen 80;
+    listen [::]:80;
+    server_name __OPERATOR_DOMAIN__;
+
+    location /.well-known/acme-challenge/ {
+        root /var/www/rastichat-acme;
+    }
+
+    location / {
+        return 301 https://$host$request_uri;
+    }
+}
+
+server {
+    # The new standalone `http2 on;` directive requires nginx 1.25.1+;
+    # Ubuntu 24.04's official apt package ships nginx 1.24.0, which only
+    # understands http2 as a `listen` parameter — use that form for
+    # compatibility with the actual target OS's default package.
+    listen 443 ssl http2;
+    listen [::]:443 ssl http2;
+    server_name __OPERATOR_DOMAIN__;
+
+    ssl_certificate     /etc/letsencrypt/live/__OPERATOR_DOMAIN__/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/__OPERATOR_DOMAIN__/privkey.pem;
+    include /etc/nginx/rastichat/snippets/ssl-params.conf;
+    include /etc/nginx/rastichat/snippets/security-headers.conf;
+
+    gzip on;
+    gzip_types application/javascript text/css application/json;
+    gzip_min_length 1024;
+
+    access_log /var/log/nginx/rastichat-operator-access.log;
+    error_log  /var/log/nginx/rastichat-operator-error.log;
+
+    location /_next/static/ {
+        limit_req zone=rastichat_general burst=40 nodelay;
+        add_header Cache-Control "public, max-age=31536000, immutable";
+        proxy_pass http://127.0.0.1:__OPERATOR_PORT__;
+        include /etc/nginx/rastichat/snippets/proxy-params.conf;
+    }
+
+    location / {
+        limit_req zone=rastichat_general burst=40 nodelay;
+        proxy_pass http://127.0.0.1:__OPERATOR_PORT__;
+        include /etc/nginx/rastichat/snippets/proxy-params.conf;
+    }
+}

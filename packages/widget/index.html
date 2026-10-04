@@ -1,0 +1,25 @@
+<!DOCTYPE html>
+<html lang="fa" dir="rtl">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>RastiChat Widget Dev</title>
+    <style>
+        body { margin: 0; padding: 0; }
+    </style>
+</head>
+<body>
+    <div id="rasti-chat-widget"></div>
+    <script type="module" src="/src/main.ts"></script>
+    <script>
+        // Initialize for local development testing
+        setTimeout(() => {
+            window.RastiChat.init({
+                projectKey: "00000000-0000-0000-0000-000000000000", // Replace with real key from DB
+                position: "left",
+                primaryColor: "#2563eb"
+            });
+        }, 500);
+    </script>
+</body>
+</html>

@@ -1,0 +1,52 @@
+services:
+  db:
+    image: postgres:15-alpine
+    environment:
+      POSTGRES_USER: rastichat
+      POSTGRES_PASSWORD: rastichat_secret
+      POSTGRES_DB: rastichat_db
+    ports:
+      - "5433:5432"  # تغییر پورت میزبان به 5433 برای جلوگیری از تداخل
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U rastichat"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6380:6379"  # تغییر پورت میزبان به 6380 برای جلوگیری از تداخل
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  backend:
+    build:
+      context: ./backend
+    command: daphne -b 0.0.0.0 -p 8000 config.asgi:application
+    volumes:
+      - ./backend:/app
+    ports:
+      - "8080:8000"  # تغییر پورت میزبان به 8080 (داخل کانتینر依然是 8000 است)
+    environment:
+      - DEBUG=1
+      - SECRET_KEY=dev-secret-key-change-in-production
+      - DB_NAME=rastichat_db
+      - DB_USER=rastichat
+      - DB_PASSWORD=rastichat_secret
+      - DB_HOST=db
+      - DB_PORT=5432
+      - REDIS_HOST=redis
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+volumes:
+  postgres_data:

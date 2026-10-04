@@ -1,0 +1,27 @@
+# Real environment files with secrets — only the .example templates are
+# ever tracked.
+.env
+.env.staging
+.env.production
+.env.local
+
+# Redis dump artifact from ad-hoc local `redis-server --daemonize yes` runs.
+dump.rdb
+
+# Local backup/restore output (see scripts/staging/backup.sh) — never
+# committed, may contain customer data.
+backups/
+scripts/staging/backups/
+
+# Generated staging demo credentials (see
+# common/management/commands/seed_staging_data.py) — never committed.
+staging-credentials.txt
+
+# Editor/OS noise.
+.DS_Store
+
+# Local audit evidence
+/docs/audit/evidence/
+
+# Local audit evidence
+/docs/audit/evidence/

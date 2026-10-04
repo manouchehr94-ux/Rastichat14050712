@@ -1,0 +1,57 @@
+name: Staging deploy
+
+# Manual only — this workflow never runs on a push. Deploying to a real
+# VPS on every commit is explicitly out of scope for this phase; a human
+# decides when staging actually moves.
+on:
+  workflow_dispatch:
+    inputs:
+      confirm:
+        description: 'Type "deploy" to confirm you want to deploy the current main to staging'
+        required: true
+
+# Requires a GitHub Environment named "staging" with the required secrets
+# below and (recommended) a manual-approval protection rule — see
+# docs/runbooks/STAGING_DEPLOYMENT.md "CI/CD" section for the one-time
+# setup this workflow assumes already exists:
+#   STAGING_SSH_HOST, STAGING_SSH_USER, STAGING_SSH_KEY: how to reach the
+#     VPS. The deploy itself runs ON the VPS (scripts/staging/deploy.sh),
+#     not from the runner — the runner only triggers it over SSH, so the
+#     VPS never needs to expose Docker/the registry to GitHub.
+jobs:
+  deploy:
+    if: github.event.inputs.confirm == 'deploy'
+    runs-on: ubuntu-latest
+    environment: staging
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Record commit being deployed
+        run: echo "Deploying commit ${{ github.sha }} to staging" | tee "$GITHUB_STEP_SUMMARY"
+
+      - name: SSH deploy
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.STAGING_SSH_HOST }}
+          username: ${{ secrets.STAGING_SSH_USER }}
+          key: ${{ secrets.STAGING_SSH_KEY }}
+          # Stop at the first failure (deploy.sh already does this
+          # internally too — set -e here as well so a failure inside the
+          # SSH session is reported as this job failing, not silently
+          # swallowed).
+          script: |
+            set -e
+            cd /opt/rastichat/app
+            git fetch origin main
+            git checkout "${{ github.sha }}"
+            scripts/staging/deploy.sh .env.staging
+
+      - name: Report result
+        if: always()
+        run: |
+          if [ "${{ job.status }}" = "success" ]; then
+            echo "✅ Staging deploy of ${{ github.sha }} succeeded." | tee -a "$GITHUB_STEP_SUMMARY"
+          else
+            echo "❌ Staging deploy of ${{ github.sha }} FAILED — see the SSH deploy step's log." | tee -a "$GITHUB_STEP_SUMMARY"
+            echo "The VPS itself may need scripts/staging/rollback.sh run by hand — this workflow does not auto-rollback." | tee -a "$GITHUB_STEP_SUMMARY"
+          fi
