@@ -108,3 +108,21 @@ process-global cache, which isn't reset between test methods.
 |---|---|
 | `IMAGE_TAG` | Moving tag (`docker-compose.staging.yml` default `staging`) every service resolves to. `scripts/staging/deploy.sh` also tags each build with the immutable git SHA for `scripts/staging/rollback.sh` to retag from. |
 | `GIT_SHA` | Backend image build arg — embedded as an OCI `org.opencontainers.image.revision` label, read by `scripts/staging/status.sh`. |
+
+
+## `WIDGET_ALLOW_UNVERIFIED_EXTERNAL_ID`
+
+Default **off** (`false`). When off, the public `POST /api/v1/widget/init/` never resolves a caller-supplied
+`external_id` to an existing visitor; it always creates a fresh visitor and keeps the claim only as
+`metadata.unverified_external_id`. Turning it **on** restores the old, spoofable lookup (anyone who knows or guesses an
+`external_id` can resume that customer's conversation) and logs a warning on every use. It exists solely as a temporary
+bridge — see `docs/runbooks/WIDGET_IDENTITY_MIGRATION.md`. Do not enable it on a deployment that stores real customer chats
+unless an embedding site cannot migrate yet and you accept that risk explicitly.
+
+### Guardrails around `WIDGET_ALLOW_UNVERIFIED_EXTERNAL_ID`
+
+- In `staging`/`production`, setting it to true **refuses to start** (`ImproperlyConfigured`) unless
+  `WIDGET_UNVERIFIED_EXTERNAL_ID_ACK=accept-spoofable-customer-identity` is also set — a stray or copied `.env` line cannot enable it.
+- Even when acknowledged, `manage.py check --deploy --fail-level WARNING --tag security` (the CI/deploy gate) reports
+  `visitors.W001` and fails, and every use logs `widget init used legacy unverified external_id lookup`.
+- Tests: `config/tests_settings_guardrails.py` (`test_unverified_external_id_*`).
