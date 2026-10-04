@@ -8,7 +8,7 @@ from django.conf import settings
 from django.core.asgi import get_asgi_application
 from channels.routing import ProtocolTypeRouter, URLRouter
 from channels.auth import AuthMiddlewareStack
-from channels.security.websocket import OriginValidator
+from projects.ws_origin import ProjectAwareOriginValidator
 from config.routing import websocket_urlpatterns
 
 # Browsers do not apply same-origin/CORS restrictions to WebSocket
@@ -26,7 +26,7 @@ _ws_allowed_origins = settings.CORS_ALLOWED_ORIGINS or ['*']
 
 application = ProtocolTypeRouter({
     "http": get_asgi_application(),
-    "websocket": OriginValidator(
+    "websocket": ProjectAwareOriginValidator(
         AuthMiddlewareStack(
             URLRouter(websocket_urlpatterns)
         ),

@@ -158,3 +158,8 @@ See `docs/runbooks/WS_TICKETS_AND_URL_CREDENTIALS.md`. `LEGACY_URL_CREDENTIALS_E
 (on for local development); turning it on there requires `LEGACY_URL_CREDENTIALS_ACK=accept-credentials-in-urls` and is reported by
 the deploy security gate as `common.W002`. `WS_TICKET_TTL_SECONDS` (30) is the ticket lifetime, `WS_AUTH_TIMEOUT_SECONDS` (10) how
 long an accepted socket may wait for its auth frame, `WS_TICKET_THROTTLE_RATE` (120/min) throttles ticket minting.
+
+## `WIDGET_REQUIRE_ALLOWED_DOMAINS`
+
+Default off. When on, a project whose `allowed_domains` is empty is refused (403 `no_domains_configured`). Turn it on only after
+`manage.py report_projects_domain_status` shows no active project without domains. See `docs/runbooks/PROJECT_ALLOWED_DOMAINS.md`.
