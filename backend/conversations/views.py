@@ -1,7 +1,7 @@
 import json
 from django.db.models import Max, F, Q
 from django.db import models
-from rest_framework import viewsets, status, permissions as drf_permissions
+from rest_framework import viewsets, mixins, status, permissions as drf_permissions
 from rest_framework.exceptions import PermissionDenied
 from rest_framework.response import Response
 from rest_framework.views import APIView
@@ -14,13 +14,14 @@ from .media_validation import validate_and_normalize_upload, UploadValidationErr
 from . import services as conv_services
 from common.pagination import StandardPagination
 from common.permissions import IsWorkspaceOperator, IsWorkspaceAdmin, IsPlatformSupportAgent, user_can_supervise_workspace
-from common.tenancy import resolve_operator_workspace
+from common.tenancy import resolve_operator_workspace, resolve_admin_workspace, admin_workspace_ids
 from visitors.models import Visitor, VisitorSession
 from catalog.models import Product
 from teams.models import TeamMembership
 from django.contrib.auth import get_user_model
 from django.core.exceptions import ValidationError as DjangoValidationError
 from django.utils import timezone
+from django.db import transaction
 from channels.layers import get_channel_layer
 from asgiref.sync import async_to_sync
 from audit.models import AuditEvent
@@ -558,22 +559,40 @@ class WidgetRateConversationView(APIView):
 
 # --- PLATFORM SUPPORT VIEWS ---
 
-class WorkspaceSupportViewSet(viewsets.ModelViewSet):
+class WorkspaceSupportViewSet(mixins.ListModelMixin, mixins.RetrieveModelMixin, viewsets.GenericViewSet):
+    """Store-admin <-> platform support conversations.
+
+    Deliberately NOT a ModelViewSet: only list/retrieve/create and the explicit
+    actions below exist, so there is no generic update/delete path. Every
+    access is scoped to workspaces where the caller is Owner/Admin of that
+    EXACT workspace (an operator role elsewhere never counts).
+    """
     serializer_class = ConversationSerializer
-    permission_classes = [IsWorkspaceAdmin]
+    permission_classes = [IsWorkspaceAdmin]  # coarse gate only; queryset enforces the exact workspace
 
     def get_queryset(self):
-        return Conversation.objects.filter(workspace__memberships__user=self.request.user, type=Conversation.Type.PLATFORM_SUPPORT)
+        return Conversation.objects.filter(
+            workspace_id__in=admin_workspace_ids(self.request.user), type=Conversation.Type.PLATFORM_SUPPORT,
+        ).order_by('-updated_at')
 
     def create(self, request, *args, **kwargs):
-        ws = request.user.workspace_memberships.filter(role__in=['WORKSPACE_OWNER', 'WORKSPACE_ADMIN']).first()
-        if not ws: return Response({'error': 'Not admin'}, status=403)
-        conv = Conversation.objects.create(
-            workspace=ws.workspace, type=Conversation.Type.PLATFORM_SUPPORT, 
-            status=Conversation.Status.WAITING_FOR_PLATFORM, subject=request.data.get('subject', 'Support')
-        )
-        AuditEvent.objects.create(actor=request.user, action='support_conversation_created', target_type='conversation', target_id=str(conv.id))
-        return Response(ConversationSerializer(conv).data, status=201)
+        workspace = resolve_admin_workspace(request.user, request.data.get('workspace_id'))
+        subject = (request.data.get('subject') or 'Support')[:255]
+        initial_message = (request.data.get('initial_message') or '').strip()
+        if len(initial_message) > 5000:
+            return Response({'error': 'Too long'}, status=400)
+        with transaction.atomic():
+            conv = Conversation.objects.create(
+                workspace=workspace, type=Conversation.Type.PLATFORM_SUPPORT,
+                status=Conversation.Status.WAITING_FOR_PLATFORM, subject=subject,
+            )
+            if initial_message:
+                Message.objects.create(
+                    conversation=conv, sender=request.user, sender_type=Message.SenderType.USER,
+                    content=initial_message, client_message_id=f'initial_{conv.id}',
+                )
+            AuditEvent.objects.create(actor=request.user, action='support_conversation_created', target_type='conversation', target_id=str(conv.id))
+        return Response(ConversationSerializer(conv, context={'request': request}).data, status=201)
 
     @action(detail=True, methods=['get'])
     def messages(self, request, pk=None):
@@ -584,18 +603,19 @@ class WorkspaceSupportViewSet(viewsets.ModelViewSet):
     @action(detail=True, methods=['post'])
     def send_message(self, request, pk=None):
         conv = self.get_object()
-        content = request.data.get('content', '').strip()
+        content = (request.data.get('content') or '').strip()
         if not content: return Response({'error': 'Empty'}, status=400)
         if len(content) > 5000: return Response({'error': 'Too long'}, status=400)
-        
+
         client_msg_id = request.data.get('client_message_id')
+        if not client_msg_id: return Response({'error': 'Missing client_message_id'}, status=400)
         if Message.objects.filter(conversation=conv, client_message_id=client_msg_id).exists():
             return Response({'error': 'Duplicate'}, status=409)
-            
+
         msg = Message.objects.create(conversation=conv, sender=request.user, sender_type=Message.SenderType.USER, content=content, client_message_id=client_msg_id)
         conv.status = Conversation.Status.WAITING_FOR_PLATFORM
         conv.save()
-        
+
         async_to_sync(get_channel_layer().group_send)(f"support_chat_{conv.id}", {'type': 'chat.message', 'message': {'id': str(msg.id), 'sender_type': 'USER', 'content': msg.content, 'created_at': msg.created_at.isoformat()}})
         return Response(MessageSerializer(msg).data, status=201)
 
