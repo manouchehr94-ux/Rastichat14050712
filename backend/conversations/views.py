@@ -56,11 +56,26 @@ def _broadcast_branding(conv):
     )
 
 
-class CustomerConversationViewSet(viewsets.ModelViewSet):
+class CustomerConversationViewSet(
+    mixins.ListModelMixin, mixins.RetrieveModelMixin, mixins.UpdateModelMixin, viewsets.GenericViewSet,
+):
+    """Operator inbox for customer conversations.
+
+    Deliberately NOT a ModelViewSet: conversations are created only by the
+    visitor flow (`StartCustomerChatView`) and are never deleted through the
+    API. The only generic write is a narrow PATCH (see `partial_update`);
+    everything else goes through the explicit, validated actions below.
+    """
     serializer_class = ConversationSerializer
     permission_classes = [IsWorkspaceOperator]
     pagination_class = None  # existing frontends depend on the plain-array shape; unchanged from earlier stages
     throttle_scope = 'media_upload'  # only consulted by the `upload` action's ScopedRateThrottle
+    http_method_names = ['get', 'post', 'patch', 'head', 'options']  # no PUT, no DELETE
+    # Free-text fields an operator may edit in place. Routing/ownership state
+    # (team, queue, priority, assignee, status) only changes via the audited
+    # actions (transfer / set_priority / assign / claim / close ...), which
+    # validate same-workspace membership and write history.
+    PATCHABLE_FIELDS = ('subject', 'category', 'notes')
 
     def get_queryset(self):
         qs = Conversation.objects.filter(workspace__memberships__user=self.request.user, type=Conversation.Type.CUSTOMER)
@@ -99,6 +114,20 @@ class CustomerConversationViewSet(viewsets.ModelViewSet):
                 filter=~Q(messages__message_type=Message.MessageType.INTERNAL_NOTE),
             )
         ).order_by(F('last_message_at').desc(nulls_last=True), '-created_at')
+
+    def partial_update(self, request, *args, **kwargs):
+        conv = self.get_object()
+        unknown = sorted(set(request.data.keys()) - set(self.PATCHABLE_FIELDS))
+        if unknown:
+            return Response(
+                {'error': f"Fields not editable here: {', '.join(unknown)}. "
+                          "Use the dedicated actions (transfer, set_priority, assign, close, ...)."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        serializer = self.get_serializer(conv, data=request.data, partial=True)
+        serializer.is_valid(raise_exception=True)
+        serializer.save()
+        return Response(ConversationSerializer(conv, context={'request': request}).data)
 
     @action(detail=True, methods=['get'])
     def messages(self, request, pk=None):
