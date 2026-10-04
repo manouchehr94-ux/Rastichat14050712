@@ -386,3 +386,49 @@ JWT/`signing` با کلید **اشتراکی فقط سرور‌به‌سرور**
 2. تصمیم جدا و صریح دربارهٔ رساندن سرور راستی‌سی به `main` فعلی (§۱.۲.۱) — فقط مالک.
 3. اصلاح عبارت `rastisi5` در `CLAUDE.md` راستی‌سی (PR جدا در راستی‌سی، پس از تأیید).
 4. هر نقطهٔ ناشناخته: رفتار واقعی سرور/تولید، لاگ‌های Nginx، نسخهٔ مستقر چت، تست‌های راستی‌سی — از این محیط قابل بررسی نیست.
+
+---
+
+## ۱۳. بررسی یکپارچهٔ اصلاحات (Phase B، مرحلهٔ تأیید ترکیب)
+
+شاخهٔ آزمایشی `claude/integration-p0-deps-verify` (PR #9، Draft، **Merge نشود**) از `main` ساخته شد و به ترتیب #3، #8، #4، #7، #5، #6 در آن ادغام شد.
+
+### ۱۳.۱ Conflict و حل آگاهانه
+- تنها Conflict: **خط import در `backend/conversations/views.py`** (تغییر مجاور در #4 با #7 و #5). حل: نگه‌داشتن `mixins` (#7/#5) و `transaction` (#4). pyflakes تأیید کرد نام تعریف‌نشده/گم‌شده نیست و هر سه ViewSet، `partial_update`، `resolve_admin_workspace` و پرچم `WIDGET_ALLOW_UNVERIFIED_EXTERNAL_ID` در ترکیب وجود دارند.
+- برای حذف Conflict از خود PRها، import `transaction` در #4 به خط جدا (دور از import مجاور) منتقل شد. **اکنون هر شش PR در سه ترتیب آزموده‌شده (ترتیب پیشنهادی و دو ترتیب معکوس/مخلوط) بدون Conflict ادغام می‌شوند.**
+- #8 اکنون commit اصلاح بیت اجرایی (#3) را هم دارد؛ شاخه‌های #4 تا #7 و این PR نیز #8 را (با merge commit، بدون rebase/force-push) دریافت کردند تا CI آن‌ها روی پایهٔ سالم اجرا شود.
+
+### ۱۳.۲ نتایج راستی‌آزمایی نسخهٔ ترکیبی (Django 5.2.17 / DRF 3.17.2)
+| بررسی | نتیجه |
+|---|---|
+| تست بک‌اند (۴ اجرای کامل **هم‌زمان** روی یک Redis) | **۵۵۸ تست، هر چهار OK**، صفر خطای Event Loop |
+| `pip-audit`، `pip check` | بدون آسیب‌پذیری/تعارض |
+| `makemigrations --check`، `check`، `check --deploy --fail-level WARNING --tag security` | موفق، بدون Migration جدید |
+| Bandit `-ll` | بدون یافته |
+| ویجت / operator-dashboard / platform-dashboard | typecheck OK؛ ۲۳ / ۹۴ / ۱۹ تست OK |
+| GitHub Actions روی PR #9 | هر ۶ Job سبز (backend، docker-build، widget، دو داشبورد، secret-scan) |
+
+### ۱۳.۳ خطای Event Loop در تست‌های WebSocket — تحلیل
+- **مشاهده:** یک بار در اجرای کامل روی شاخهٔ #7 (پشتهٔ قدیمی Django 4.2/channels 4.0.0/channels-redis 4.1.0)، هم‌زمان با ۳ اجرای کامل دیگر: ابتدا `TimeoutError` در `receive_json_from` (تست `test_e2e_customer_chat_flow`)، سپس ۴ خطای `Lock … bound to a different event loop` در تست‌های بعدی.
+- **قرائن:** اولین خطا Timeout است و بقیه ردیفی (cascade) بعد از آن. اجرای مجدد همان شاخه و همچنین ۴ اجرای کامل هم‌زمان روی پشتهٔ جدید، بدون خطا بود.
+- **تلاش‌های بازتولید (همه ناموفق):** (۱) ۱۲ پردازش busy-loop هم‌زمان با تست‌های WS (۶۵ تست OK)؛ (۲) ۴ اجرای هم‌زمان زیرمجموعهٔ WS روی هر دو پشته (۸ اجرا OK)؛ (۳) تست مصنوعی «Timeout بدون disconnect و بعد تست WS دیگر» (۳ بار OK).
+- **نتیجه:** علت قطعی **اثبات نشد**؛ نمی‌توان آن را صرفاً به «اجرای موازی» نسبت داد و تکرارپذیر هم نیست. فرضیهٔ محتمل: Timeout (۱–۲ ثانیه) در تست WS تحت فشار منابع، و باقی‌ماندن Task/اتصال کانال‌لایر ناتمام که تست‌های بعد با Event Loop جدید با آن برخورد می‌کنند. پشتهٔ جدید (channels-redis 4.3.0) در ۴ اجرای کامل و CI این خطا را نداد، اما این **اثبات نبود خطا نیست**. اگر در CI دیده شد: ثبت لاگ کامل، و آنگاه (الف) افزایش Timeoutها و (ب) پاک‌سازی کانال‌لایر در `tearDown` تست‌های WS.
+
+### ۱۳.۴ پرچم `WIDGET_ALLOW_UNVERIFIED_EXTERNAL_ID`
+پیش‌فرض خاموش (تست می‌شود). جلوگیری/شناسایی فعال‌شدن تصادفی در محیط عملیاتی (در PR #6):
+1. staging/production با پرچم روشن **بدون** `WIDGET_UNVERIFIED_EXTERNAL_ID_ACK=accept-spoofable-customer-identity` **اصلاً بالا نمی‌آید** (`ImproperlyConfigured`).
+2. با ack، سرور بالا می‌آید ولی `check --deploy --fail-level WARNING --tag security` (گیت CI/استقرار) با `visitors.W001` **قرمز** می‌شود.
+3. هر استفاده یک WARNING لاگ می‌کند.
+محدودیت: اگر کسی هر دو متغیر را عمداً بگذارد و گیت امنیتی را دور بزند، آسیب‌پذیری فعال است؛ و هشدار لاگ هنوز مانیتور نمی‌شود (مانیتورینگ/هشدار خودکار ساخته نشده).
+
+### ۱۳.۵ محدودیت‌های باقی‌مانده (آزمایش‌شده روی نسخهٔ ترکیبی، اصلاح‌نشده)
+| مورد | شواهد | شدت |
+|---|---|---|
+| WS داشبورد با JWT کاربر **غیرفعال** وصل می‌شود (REST همان توکن ⇒ ۴۰۱) | probe: `inactive-user WS connected: True`، REST ۴۰۱ | P1 |
+| نشست مشتری **منقضی‌شده** پذیرفته می‌شود (`expires_at` هرگز بررسی نمی‌شود) | probe: `expired visitor session accepted: 200` | P1 |
+| JWT (۶۰ دقیقه) و `session_token` در **مسیر/Query URL** WebSocket و `GET messages` | `config/routing.py` | P1 |
+| `VisitorSession.token` بدون چرخش/ابطال؛ در `localStorage` | کد | P1 |
+| عضویت فقط **هنگام اتصال** بررسی می‌شود؛ حذف عضو بعد از اتصال، سوکت باز را قطع نمی‌کند | کد (حذف عضو قبل از اتصال ⇒ رد می‌شود: probe) | P1 |
+| `allowed_domains` پروژه اعمال نمی‌شود؛ CORS سراسری | کد | P1 |
+| WS پشتیبانی و REST پشتیبانی نرخ‌محدودیت ندارند | کد | P2 |
+| `/media/` بدون احراز | `deploy/nginx` | P2 |
