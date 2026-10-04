@@ -345,6 +345,11 @@ if (
         'truly requires it, also set WIDGET_UNVERIFIED_EXTERNAL_ID_ACK=%s (see '
         'docs/runbooks/WIDGET_IDENTITY_MIGRATION.md).' % WIDGET_UNVERIFIED_EXTERNAL_ID_ACK_VALUE
     )
+# How long (seconds) a WebSocket's authorization result is cached before the
+# consumer re-checks it against the database (see common/ws_auth.py). This is
+# the maximum time a user who was deactivated / removed / demoted can still
+# receive events on an already-open socket. 0 = check on every event.
+WS_REVALIDATE_SECONDS = int(os.environ.get('WS_REVALIDATE_SECONDS', 5))
 WIDGET_WS_MESSAGE_RATE_LIMIT = int(os.environ.get('WIDGET_WS_MESSAGE_RATE_LIMIT', 30))
 WIDGET_WS_MESSAGE_RATE_WINDOW_SECONDS = int(os.environ.get('WIDGET_WS_MESSAGE_RATE_WINDOW_SECONDS', 60))
 

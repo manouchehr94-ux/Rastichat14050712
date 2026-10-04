@@ -30,5 +30,5 @@ def broadcast_presence_updated(user, workspace_ids, status):
     for workspace_id in workspace_ids:
         async_to_sync(layer.group_send)(f'workspace_presence_{workspace_id}', {
             'type': 'agent.presence_updated',
-            'user_id': str(user.id), 'status': status,
+            'user_id': str(user.id), 'status': status, 'workspace_id': str(workspace_id),
         })
