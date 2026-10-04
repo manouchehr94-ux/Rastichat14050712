@@ -1,6 +1,6 @@
 import json
 from django.db.models import Max, F, Q
-from django.db import models, transaction
+from django.db import models
 from rest_framework import viewsets, mixins, status, permissions as drf_permissions
 from rest_framework.exceptions import PermissionDenied
 from rest_framework.response import Response
@@ -21,6 +21,7 @@ from teams.models import TeamMembership
 from django.contrib.auth import get_user_model
 from django.core.exceptions import ValidationError as DjangoValidationError
 from django.utils import timezone
+from django.db import transaction
 from channels.layers import get_channel_layer
 from asgiref.sync import async_to_sync
 from audit.models import AuditEvent
