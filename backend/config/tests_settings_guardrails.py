@@ -128,6 +128,34 @@ class StagingFailFastTests(SimpleTestCase):
         self.assertEqual(gate.returncode, 0, gate.stderr)
         self.assertNotIn('visitors.W001', gate.stderr + gate.stdout)
 
+    def test_legacy_url_credentials_default_off_in_staging(self):
+        # the shared baseline sets neither variable: the dangerous mechanism must be OFF by default
+        import os, subprocess, sys
+        env = {'PATH': os.environ.get('PATH', ''), **VALID_STAGING_ENV}
+        out = subprocess.run(
+            [sys.executable, '-c',
+             'import django,os;os.environ.setdefault("DJANGO_SETTINGS_MODULE","config.settings");django.setup();'
+             'from django.conf import settings;print(settings.LEGACY_URL_CREDENTIALS_ENABLED)'],
+            cwd=BASE_DIR, env=env, capture_output=True, text=True, timeout=60)
+        self.assertEqual(out.stdout.strip().splitlines()[-1], 'False', out.stderr)
+
+    def test_legacy_url_credentials_without_ack_fails_startup(self):
+        result = run_check({'LEGACY_URL_CREDENTIALS_ENABLED': '1'})
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn('LEGACY_URL_CREDENTIALS_ENABLED', result.stderr)
+        self.assertIn('LEGACY_URL_CREDENTIALS_ACK', result.stderr)
+
+    def test_legacy_url_credentials_wrong_ack_fails_startup(self):
+        result = run_check({'LEGACY_URL_CREDENTIALS_ENABLED': '1', 'LEGACY_URL_CREDENTIALS_ACK': 'true'})
+        self.assertNotEqual(result.returncode, 0)
+
+    def test_legacy_url_credentials_with_ack_starts_but_deploy_gate_flags_it(self):
+        env = {'LEGACY_URL_CREDENTIALS_ENABLED': '1', 'LEGACY_URL_CREDENTIALS_ACK': 'accept-credentials-in-urls'}
+        self.assertEqual(run_check(env).returncode, 0)
+        gate = run_check(env, extra_args=['--deploy', '--fail-level', 'WARNING', '--tag', 'security'])
+        self.assertNotEqual(gate.returncode, 0)
+        self.assertIn('common.W002', gate.stderr + gate.stdout)
+
     def test_invalid_environment_value_fails(self):
         result = run_check({'ENVIRONMENT': 'not-a-real-environment'})
         self.assertNotEqual(result.returncode, 0)

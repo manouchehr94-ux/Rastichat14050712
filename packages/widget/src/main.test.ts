@@ -14,12 +14,22 @@ class FakeWebSocket {
   onclose: (() => void) | null = null;
   onopen: (() => void) | null = null;
   sent: string[] = [];
+  authFrames: unknown[] = [];
 
   constructor(url: string) {
     this.url = url;
     FakeWebSocket.instances.push(this);
+    // handlers are assigned synchronously after construction, so a microtask models the browser's async "open"
+    queueMicrotask(() => this.onopen?.());
   }
   send(data: string) {
+    const parsed = (() => { try { return JSON.parse(data); } catch { return null; } })();
+    if (parsed?.type === 'auth') {
+      // the server acknowledges a ticket frame; it is protocol, not chat traffic
+      this.authFrames.push(parsed);
+      queueMicrotask(() => this.emitMessage({ type: 'auth.ok' }));
+      return;
+    }
     this.sent.push(data);
   }
   close() {
@@ -97,6 +107,7 @@ describe('RastiChatWidget', () => {
     fetchMock = vi.fn((url: string) => {
       if (url.includes('/widget/init/')) return jsonResponse({ session_token: 'sess-1' });
       if (url.includes('/widget/start/')) return jsonResponse({ id: 'conv-1' });
+      if (url.includes('/widget/ws-ticket/')) return jsonResponse({ ticket: 'ticket-1' });
       if (url.includes('/messages/')) return jsonResponse([]);
       return jsonResponse({});
     });
@@ -153,6 +164,7 @@ describe('RastiChatWidget', () => {
     let startCalls = 0;
     fetchMock.mockImplementation((url: string) => {
       if (url.includes('/widget/init/')) return jsonResponse({ session_token: 'fresh-session' });
+      if (url.includes('/widget/ws-ticket/')) return jsonResponse({ ticket: 'ticket-new' });
       if (url.includes('/widget/start/')) {
         startCalls += 1;
         return startCalls === 1
@@ -164,8 +176,10 @@ describe('RastiChatWidget', () => {
     await initWidget();
     expect(localStorage.getItem('rasti_session')).toBe('fresh-session');
     expect(startCalls).toBe(2);
-    expect(FakeWebSocket.instances.some((w) => w.url.includes('fresh-session') && w.url.includes('conv-new'))).toBe(true);
-    expect(FakeWebSocket.instances.some((w) => w.url.includes('dead-session'))).toBe(false);
+    expect(FakeWebSocket.instances.map((w) => w.url)).toEqual(['ws://localhost:8080/ws/v2/widget/conv-new/']);
+    const ticketCalls = fetchMock.mock.calls.filter((c: unknown[]) => String(c[0]).includes('/widget/ws-ticket/'));
+    expect(ticketCalls).toHaveLength(1);
+    expect(ticketCalls[0][1].headers['X-Widget-Session']).toBe('fresh-session'); // never the dead one
   });
 
   it('does not loop when the server keeps answering 401 (recovers at most once)', async () => {
@@ -188,12 +202,13 @@ describe('RastiChatWidget', () => {
     fetchMock.mockImplementation((url: string) => {
       if (url.includes('/widget/start/')) return jsonResponse({ id: 'conv-1', rotate_session: true });
       if (url.includes('/widget/session/rotate/')) return jsonResponse({ session_token: 'rotated-token' });
+      if (url.includes('/widget/ws-ticket/')) return jsonResponse({ ticket: 'ticket-r' });
       return jsonResponse([]);
     });
     await initWidget();
     expect(localStorage.getItem('rasti_session')).toBe('rotated-token');
-    expect(FakeWebSocket.instances.map((w) => w.url).join(' ')).toContain('rotated-token');
-    expect(FakeWebSocket.instances.map((w) => w.url).join(' ')).not.toContain('old-token');
+    const ticketCall = fetchMock.mock.calls.find((c: unknown[]) => String(c[0]).includes('/widget/ws-ticket/'));
+    expect(ticketCall[1].headers['X-Widget-Session']).toBe('rotated-token');
   });
 
   it('logout revokes the session server-side, forgets it locally and closes the socket', async () => {
@@ -207,6 +222,52 @@ describe('RastiChatWidget', () => {
       expect.objectContaining({ body: JSON.stringify({ session_token: 'sess-1' }) }),
     );
   });
+
+  it('never puts a credential in any URL: ticket-authenticated socket, session in a header', async () => {
+    localStorage.setItem('rasti_session', 'SECRET-SESSION');
+    const ws = await initWidget();
+    expect(ws.url).toBe('ws://localhost:8080/ws/v2/widget/conv-1/');
+    expect(ws.authFrames).toEqual([{ type: 'auth', ticket: 'ticket-1' }]);
+    const urls = fetchMock.mock.calls.map((c: unknown[]) => String(c[0]));
+    for (const url of [...urls, ws.url]) {
+      expect(url).not.toContain('SECRET-SESSION');
+      expect(url).not.toContain('session_token');
+      expect(url).not.toContain('ticket-1');
+    }
+    const history = fetchMock.mock.calls.find((c: unknown[]) => String(c[0]).includes('/messages/'));
+    expect(history[1].headers['X-Widget-Session']).toBe('SECRET-SESSION');
+  });
+
+  it('does not let the user send before the server has acknowledged the ticket', async () => {
+    const original = FakeWebSocket.prototype.send;
+    FakeWebSocket.prototype.send = function (this: FakeWebSocket, data: string) {
+      if (JSON.parse(data).type === 'auth') { this.authFrames.push(JSON.parse(data)); return; } // server never answers
+      original.call(this, data);
+    };
+    try {
+      const ws = await initWidget();
+      const input = document.getElementById('rasti-input') as HTMLInputElement;
+      input.value = 'too early';
+      document.getElementById('rasti-send')!.click();
+      expect(ws.sent).toHaveLength(0);
+      ws.emitMessage({ type: 'auth.ok' });
+      input.value = 'now';
+      document.getElementById('rasti-send')!.click();
+      expect(ws.sent).toHaveLength(1);
+    } finally {
+      FakeWebSocket.prototype.send = original;
+    }
+  });
+
+  it('fetches a fresh ticket for every reconnect and recovers a rejected one via session recovery', async () => {
+    const ws = await initWidget();
+    ws.close();
+    await new Promise((r) => setTimeout(r, 2100));
+    await flushMicrotasks();
+    const tickets = fetchMock.mock.calls.filter((c: unknown[]) => String(c[0]).includes('/widget/ws-ticket/'));
+    expect(tickets.length).toBe(2);
+    expect(FakeWebSocket.instances.length).toBe(2);
+  }, 10000);
 
   it('sends a text message over the websocket and renders it optimistically', async () => {
     const ws = await initWidget();
@@ -361,7 +422,7 @@ describe('RastiChatWidget', () => {
       expect.stringContaining('https://chat.example.com/api/v1/widget/init/'),
       expect.anything(),
     );
-    expect(FakeWebSocket.instances[0].url.startsWith('wss://chat.example.com/ws/widget/')).toBe(true);
+    expect(FakeWebSocket.instances[0].url).toBe('wss://chat.example.com/ws/v2/widget/conv-1/');
   });
 
   it('applies real store/consultant branding from the start response and never renders a hardcoded sample name', async () => {

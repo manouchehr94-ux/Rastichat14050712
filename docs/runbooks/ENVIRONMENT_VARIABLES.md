@@ -151,3 +151,10 @@ deploy time + max age` — a one-TTL grace so a customer with an open conversati
 widget; only credentials are written. After the grace period an unused legacy session stops working; that customer's next
 visit opens a fresh guest session (operators still see the old conversation). Do **not** run it against production without
 the owner's approval.
+
+## `LEGACY_URL_CREDENTIALS_ENABLED`, `WS_TICKET_TTL_SECONDS`, `WS_AUTH_TIMEOUT_SECONDS`, `WS_TICKET_THROTTLE_RATE`
+
+See `docs/runbooks/WS_TICKETS_AND_URL_CREDENTIALS.md`. `LEGACY_URL_CREDENTIALS_ENABLED` defaults to **off** on staging/production
+(on for local development); turning it on there requires `LEGACY_URL_CREDENTIALS_ACK=accept-credentials-in-urls` and is reported by
+the deploy security gate as `common.W002`. `WS_TICKET_TTL_SECONDS` (30) is the ticket lifetime, `WS_AUTH_TIMEOUT_SECONDS` (10) how
+long an accepted socket may wait for its auth frame, `WS_TICKET_THROTTLE_RATE` (120/min) throttles ticket minting.

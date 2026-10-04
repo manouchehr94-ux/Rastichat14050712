@@ -349,6 +349,32 @@ if (
         'truly requires it, also set WIDGET_UNVERIFIED_EXTERNAL_ID_ACK=%s (see '
         'docs/runbooks/WIDGET_IDENTITY_MIGRATION.md).' % WIDGET_UNVERIFIED_EXTERNAL_ID_ACK_VALUE
     )
+# Credentials in URLs (a 60-minute JWT or a visitor session token in the WebSocket path, or
+# `?session_token=` on widget REST calls) end up in proxy access logs, browser history and
+# Referer headers. The supported mechanism is a short-lived single-use ticket sent in the first
+# WebSocket frame (common/ws_tickets.py) and the `X-Widget-Session` header. The legacy URL
+# mechanism is therefore OFF by default on staging/production; it stays on for local development
+# so existing tooling keeps working. Re-enabling it on staging/production (e.g. during a staged
+# client rollout) needs the explicit acknowledgement below, and the deploy security gate
+# (`check --deploy --tag security`) reports common.W002 for as long as it is on.
+LEGACY_URL_CREDENTIALS_ENABLED = _env_bool('LEGACY_URL_CREDENTIALS_ENABLED', default=not IS_PRODUCTION_LIKE)
+LEGACY_URL_CREDENTIALS_ACK = os.environ.get('LEGACY_URL_CREDENTIALS_ACK', '').strip()
+LEGACY_URL_CREDENTIALS_ACK_VALUE = 'accept-credentials-in-urls'
+if (
+    IS_PRODUCTION_LIKE and LEGACY_URL_CREDENTIALS_ENABLED
+    and LEGACY_URL_CREDENTIALS_ACK != LEGACY_URL_CREDENTIALS_ACK_VALUE
+):
+    raise ImproperlyConfigured(
+        'LEGACY_URL_CREDENTIALS_ENABLED=1 re-enables JWTs/session tokens in WebSocket and query-string URLs '
+        '(they get logged by proxies) and is refused when ENVIRONMENT is staging or production. If a documented '
+        'staged client rollout truly requires it, also set LEGACY_URL_CREDENTIALS_ACK=%s (see '
+        'docs/runbooks/WS_TICKETS_AND_URL_CREDENTIALS.md).' % LEGACY_URL_CREDENTIALS_ACK_VALUE
+    )
+
+# WebSocket ticket lifetime and how long an accepted-but-unauthenticated socket may wait for its auth frame.
+WS_TICKET_TTL_SECONDS = int(os.environ.get('WS_TICKET_TTL_SECONDS', 30))
+WS_AUTH_TIMEOUT_SECONDS = float(os.environ.get('WS_AUTH_TIMEOUT_SECONDS', 10))
+
 # How long (seconds) a WebSocket's authorization result is cached before the
 # consumer re-checks it against the database (see common/ws_auth.py). This is
 # the maximum time a user who was deactivated / removed / demoted can still
@@ -439,6 +465,7 @@ REST_FRAMEWORK = {
         'login': None if TESTING else os.environ.get('LOGIN_THROTTLE_RATE', '10/min'),
         'widget_start': None if TESTING else os.environ.get('WIDGET_START_THROTTLE_RATE', '20/min'),
         'widget_message': None if TESTING else os.environ.get('WIDGET_MESSAGE_THROTTLE_RATE', '60/min'),
+        'ws_ticket': None if TESTING else os.environ.get('WS_TICKET_THROTTLE_RATE', '120/min'),
         'widget_session': None if TESTING else os.environ.get('WIDGET_SESSION_THROTTLE_RATE', '30/min'),
         'widget_rating': None if TESTING else os.environ.get('WIDGET_RATING_THROTTLE_RATE', '20/min'),
         'kb_feedback': None if TESTING else os.environ.get('KB_FEEDBACK_THROTTLE_RATE', '20/min'),

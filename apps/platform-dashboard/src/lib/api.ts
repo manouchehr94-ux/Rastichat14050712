@@ -1,6 +1,10 @@
 const API_BASE = process.env.NEXT_PUBLIC_API_BASE_URL || 'http://localhost:8080/api/v1';
 const WS_BASE = process.env.NEXT_PUBLIC_WS_BASE_URL || 'ws://localhost:8080/ws';
 
+import { TicketSocket } from './ticketSocket';
+
+export interface SupportSocketMessage { id: string; content: string; sender_type: string; [key: string]: unknown }
+
 export const login = async (email: string, password: string) => {
     const res = await fetch(`${API_BASE}/auth/login/`, {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
@@ -52,9 +56,13 @@ export const markPlatformRead = async (convId: string) => {
     return res.json();
 };
 
-export const connectSupportWebSocket = (convId: string, onMessage: (data: any) => void) => {
-    const token = getToken();
-    const ws = new WebSocket(`${WS_BASE}/dashboard/support/${token}/${convId}/`);
-    ws.onmessage = (event) => onMessage(JSON.parse(event.data));
-    return ws;
-};
+/**
+ * Credential-free support connection (see ticketSocket.ts). TicketSocket implements the part of the
+ * WebSocket API callers use (send / close / readyState), so it is typed as WebSocket and call sites stay unchanged.
+ */
+export const connectSupportWebSocket = (convId: string, onMessage: (data: SupportSocketMessage) => void): WebSocket =>
+    new TicketSocket({
+        apiBase: API_BASE, wsBase: WS_BASE, getToken, path: `/v2/support/${convId}/`,
+        ticketRequest: { kind: 'support', conversation_id: convId },
+        onMessage: (data) => onMessage(data as SupportSocketMessage),
+    }) as unknown as WebSocket;
