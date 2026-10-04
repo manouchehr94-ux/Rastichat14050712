@@ -3,9 +3,12 @@
   "version": "1.0.0",
   "private": true,
   "scripts": {
-    "test": "playwright test"
+    "test": "playwright test",
+    "test:django52": "playwright test -c staging-django52/playwright.config.ts",
+    "typecheck:django52": "tsc -p staging-django52/tsconfig.json"
   },
   "devDependencies": {
-    "@playwright/test": "^1.48.0"
+    "@playwright/test": "^1.48.0",
+    "typescript": "^5.6.0"
   }
 }
