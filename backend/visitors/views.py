@@ -15,6 +15,9 @@ logger = logging.getLogger(__name__)
 
 class InitVisitorView(APIView):
     permission_classes = [] # Public endpoint for widget
+    # every call creates a Visitor + session row: unthrottled it is a free way to bloat the database
+    throttle_classes = [ScopedRateThrottle]
+    throttle_scope = 'widget_init'
 
     def post(self, request):
         serializer = VisitorInitSerializer(data=request.data)

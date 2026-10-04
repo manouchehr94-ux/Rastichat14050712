@@ -163,3 +163,9 @@ long an accepted socket may wait for its auth frame, `WS_TICKET_THROTTLE_RATE` (
 
 Default off. When on, a project whose `allowed_domains` is empty is refused (403 `no_domains_configured`). Turn it on only after
 `manage.py report_projects_domain_status` shows no active project without domains. See `docs/runbooks/PROJECT_ALLOWED_DOMAINS.md`.
+
+## Abuse limits: `SUPPORT_WRITE_THROTTLE_RATE`, `WIDGET_INIT_THROTTLE_RATE`, `STAFF_WS_MESSAGE_RATE_LIMIT`, `STAFF_WS_MESSAGE_RATE_WINDOW_SECONDS`
+
+`SUPPORT_WRITE_THROTTLE_RATE` (60/min per user) limits support/operator write endpoints; `WIDGET_INIT_THROTTLE_RATE` (30/min per IP) limits
+session creation; `STAFF_WS_MESSAGE_RATE_LIMIT` / `..._WINDOW_SECONDS` (60 per 60 s per user) limit messages sent over operator and
+support WebSockets (the client is told with a `rate_limited` frame). All are disabled under `manage.py test`. See `docs/audit/P1_5_PROTECTION_REVIEW.md`.

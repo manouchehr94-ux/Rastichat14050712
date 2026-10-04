@@ -13,6 +13,7 @@ from .serializers import ConversationSerializer, MessageSerializer, AssignmentSe
 from .media_validation import validate_and_normalize_upload, UploadValidationError
 from . import services as conv_services
 from common.pagination import StandardPagination
+from common.throttles import StaffWriteThrottle
 from common.permissions import IsWorkspaceOperator, IsWorkspaceAdmin, IsPlatformSupportAgent, user_can_supervise_workspace
 from common.tenancy import resolve_operator_workspace, resolve_admin_workspace, admin_workspace_ids
 from visitors.models import Visitor, VisitorSession
@@ -443,6 +444,7 @@ class MessageListView(APIView):
 
 class SendMessageView(APIView):
     permission_classes = [IsWorkspaceOperator]
+    throttle_classes = [StaffWriteThrottle]
     def post(self, request, conv_id):
         content = request.data.get('content', '').strip()
         if not content: return Response({'error': 'Empty message'}, status=status.HTTP_400_BAD_REQUEST)
@@ -622,6 +624,14 @@ class WorkspaceSupportViewSet(mixins.ListModelMixin, mixins.RetrieveModelMixin, 
     serializer_class = ConversationSerializer
     permission_classes = [IsWorkspaceAdmin]  # coarse gate only; queryset enforces the exact workspace
 
+    _THROTTLED_ACTIONS = ('create', 'send_message', 'reply', 'assign', 'mark_read')
+
+    def get_throttles(self):
+        # only WRITE actions are limited: reading the inbox is cheap and polled
+        if self.action in self._THROTTLED_ACTIONS:
+            return [StaffWriteThrottle()]
+        return super().get_throttles()
+
     def get_queryset(self):
         return Conversation.objects.filter(
             workspace_id__in=admin_workspace_ids(self.request.user), type=Conversation.Type.PLATFORM_SUPPORT,
@@ -688,6 +698,14 @@ class PlatformSupportViewSet(mixins.ListModelMixin, mixins.RetrieveModelMixin, v
     """
     serializer_class = ConversationSerializer
     permission_classes = [IsPlatformSupportAgent]
+
+    _THROTTLED_ACTIONS = ('create', 'send_message', 'reply', 'assign', 'mark_read')
+
+    def get_throttles(self):
+        # only WRITE actions are limited: reading the inbox is cheap and polled
+        if self.action in self._THROTTLED_ACTIONS:
+            return [StaffWriteThrottle()]
+        return super().get_throttles()
 
     def get_queryset(self):
         return Conversation.objects.filter(
