@@ -3,7 +3,7 @@
 # local nginx + TLS on example.test names, own PostgreSQL/Redis, 2 Daphne workers behind a layer-4 balancer, Next dashboards).
 # Nothing here reaches any real host: no VPS, no chatchat.rastisi.ir, no production DB/nginx, no RastiSi.
 # usage: run-matrix.sh <run-label> [soak-minutes]      evidence -> $SANDBOX_DIR/evidence/final/<run-label>/
-SB="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"; S=${SANDBOX_DIR:?set SANDBOX_DIR (state dir with stg/{backend.env,env.staging,ca.crt,...}); see README.md}; R=$(cd "$SB/../../.." && pwd); PY=${VENV:-/tmp/venv}/bin/python
+SB="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"; S=${SANDBOX_DIR:?set SANDBOX_DIR, see README.md}; R=$(cd "$SB/../../.." && pwd); PY=${VENV:-/tmp/venv}/bin/python
 RUN=${1:?run label}; SOAK=${2:-30}; E=$S/evidence/final/$RUN; mkdir -p $E
 H=$SB; L=$S/stg/logs
 declare -a NAMES RCS DURS

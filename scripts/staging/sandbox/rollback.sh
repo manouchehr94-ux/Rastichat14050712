@@ -2,7 +2,7 @@
 # Rollback rehearsal on the sandbox staging stack ONLY (own DBs rasti_stg / rasti_rb, own local nginx). Prints a timed report.
 # 1) snapshot the DB  2) stop the new release, restore the snapshot into rasti_rb, start the PREVIOUS release (origin/main = PR base)
 #    and flip nginx to the compat switch  3) verify chat + old-style attachment URL  4) roll forward again, verify private attachments are closed.
-SB="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"; S=${SANDBOX_DIR:?set SANDBOX_DIR (state dir with stg/{backend.env,env.staging,ca.crt,...}); see README.md}; R=$(cd "$SB/../../.." && pwd); PY=${VENV:-/tmp/venv}/bin/python
+SB="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"; S=${SANDBOX_DIR:?set SANDBOX_DIR, see README.md}; R=$(cd "$SB/../../.." && pwd); PY=${VENV:-/tmp/venv}/bin/python
 . $SB/pw.env; . $S/stg/backend.env; L=$S/stg/logs
 ms() { echo $(( $(date +%s%N) / 1000000 )); }
 T0=$(ms); ok=0; bad=0
