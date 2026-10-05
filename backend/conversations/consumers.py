@@ -11,10 +11,11 @@ from workspaces.models import WorkspaceMembership
 from platforms.models import PlatformMembership
 from accounts.presence import touch_presence
 from common.ws_throttling import is_rate_limited
+from common.ws_auth import RevalidatingConsumerMixin
 
 User = get_user_model()
 
-class BaseChatConsumer(AsyncJsonWebsocketConsumer):
+class BaseChatConsumer(RevalidatingConsumerMixin, AsyncJsonWebsocketConsumer):
     async def receive(self, text_data=None, bytes_data=None, **kwargs):
         if text_data:
             try: json.loads(text_data)
@@ -87,16 +88,26 @@ class WidgetChatConsumer(BaseChatConsumer):
         self.group_name = f"chat_{self.conv_id}"
         await self.accept()
         await self.channel_layer.group_add(self.group_name, self.channel_name)
+        self.authz_enabled = True
 
     @database_sync_to_async
     def _get_visitor_conversation(self):
         try:
-            session = VisitorSession.objects.get(token=self.session_token)
+            session = VisitorSession.objects.select_related('visitor__project__workspace').get(token=self.session_token)
+            project = session.visitor.project
+            if not (project.is_active and project.workspace.is_active):
+                return None
             return Conversation.objects.get(id=self.conv_id, visitor=session.visitor, type=Conversation.Type.CUSTOMER)
         except Exception: return None
 
-    async def disconnect(self, close_code):
+    async def is_still_authorized(self):
+        return await self._get_visitor_conversation() is not None
+
+    async def leave_groups(self):
         if hasattr(self, 'group_name'): await self.channel_layer.group_discard(self.group_name, self.channel_name)
+
+    async def disconnect(self, close_code):
+        await self.leave_groups()
 
     async def receive_json(self, content):
         msg_kind = content.get('type')
@@ -159,6 +170,7 @@ class DashboardChatConsumer(OpsEventsMixin, BaseChatConsumer):
         await self.accept()
         await self.channel_layer.group_add(self.group_name, self.channel_name)
         await self.channel_layer.group_add(self.ops_group_name, self.channel_name)
+        self.authz_enabled = True
         is_assigned_operator = await self._touch_presence_and_check_assigned()
         if is_assigned_operator:
             branding = await self._build_branding()
@@ -168,10 +180,32 @@ class DashboardChatConsumer(OpsEventsMixin, BaseChatConsumer):
     def _get_user_conversation(self):
         try:
             access_token = AccessToken(self.token)
-            user = User.objects.get(id=access_token['user_id'])
-            self.user = user  # FIX: Store user for later use
-            return Conversation.objects.get(id=self.conv_id, workspace__memberships__user=user, type=Conversation.Type.CUSTOMER)
+            user = User.objects.get(id=access_token['user_id'], is_active=True)
+            conv = self._conversation_for(user)
+            if conv:
+                self.user = user
+            return conv
         except Exception: return None
+
+    def _conversation_for(self, user):
+        try:
+            return Conversation.objects.get(
+                id=self.conv_id, workspace__memberships__user=user, workspace__is_active=True,
+                type=Conversation.Type.CUSTOMER,
+            )
+        except Conversation.DoesNotExist:
+            return None
+
+    @database_sync_to_async
+    def _authorized_for_user(self):
+        # Deliberately re-reads the user row (is_active) and the membership but
+        # NOT the JWT: the token's own exp was enforced at connect time; a
+        # long-lived socket must survive token expiry, not permission changes.
+        user = User.objects.filter(id=self.user.id, is_active=True).first()
+        return bool(user and self._conversation_for(user))
+
+    async def is_still_authorized(self):
+        return await self._authorized_for_user()
 
     @database_sync_to_async
     def _touch_presence_and_check_assigned(self):
@@ -182,9 +216,12 @@ class DashboardChatConsumer(OpsEventsMixin, BaseChatConsumer):
     def _build_branding(self):
         return build_widget_branding(self.conversation)
 
-    async def disconnect(self, close_code):
+    async def leave_groups(self):
         if hasattr(self, 'group_name'): await self.channel_layer.group_discard(self.group_name, self.channel_name)
         if hasattr(self, 'ops_group_name'): await self.channel_layer.group_discard(self.ops_group_name, self.channel_name)
+
+    async def disconnect(self, close_code):
+        await self.leave_groups()
 
     async def receive_json(self, content):
         msg_kind = content.get('type')
@@ -235,24 +272,47 @@ class DashboardSupportConsumer(BaseChatConsumer):
         self.group_name = f"support_chat_{self.conv_id}"
         await self.accept()
         await self.channel_layer.group_add(self.group_name, self.channel_name)
+        self.authz_enabled = True
+
+    def _support_conversation_for(self, user):
+        """The support conversation iff `user` is Owner/Admin of THIS workspace
+        or platform staff of THIS workspace's platform (and both are active)."""
+        conv = Conversation.objects.select_related('workspace__platform').filter(
+            id=self.conv_id, type=Conversation.Type.PLATFORM_SUPPORT,
+        ).first()
+        if not conv or not conv.workspace.is_active or not conv.workspace.platform.is_active:
+            return None
+        is_ws_admin = WorkspaceMembership.objects.filter(
+            user=user, workspace=conv.workspace, role__in=['WORKSPACE_OWNER', 'WORKSPACE_ADMIN']).exists()
+        is_pl_support = PlatformMembership.objects.filter(
+            user=user, platform=conv.workspace.platform,
+            role__in=['PLATFORM_OWNER', 'PLATFORM_ADMIN', 'PLATFORM_SUPPORT_AGENT']).exists()
+        return conv if (is_ws_admin or is_pl_support) else None
 
     @database_sync_to_async
     def _get_support_conversation(self):
         try:
             access_token = AccessToken(self.token)
-            user = User.objects.get(id=access_token['user_id'])
-            conv = Conversation.objects.get(id=self.conv_id, type=Conversation.Type.PLATFORM_SUPPORT)
-            # Check if user is Workspace Admin/Owner of this workspace OR Platform Support Agent of this platform
-            is_ws_admin = WorkspaceMembership.objects.filter(user=user, workspace=conv.workspace, role__in=['WORKSPACE_OWNER', 'WORKSPACE_ADMIN']).exists()
-            is_pl_support = PlatformMembership.objects.filter(user=user, platform=conv.workspace.platform, role__in=['PLATFORM_OWNER', 'PLATFORM_ADMIN', 'PLATFORM_SUPPORT_AGENT']).exists()
-            if is_ws_admin or is_pl_support:
+            user = User.objects.get(id=access_token['user_id'], is_active=True)
+            conv = self._support_conversation_for(user)
+            if conv:
                 self.user = user
-                return conv
-            return None
+            return conv
         except Exception: return None
 
-    async def disconnect(self, close_code):
+    @database_sync_to_async
+    def _authorized_for_user(self):
+        user = User.objects.filter(id=self.user.id, is_active=True).first()
+        return bool(user and self._support_conversation_for(user))
+
+    async def is_still_authorized(self):
+        return await self._authorized_for_user()
+
+    async def leave_groups(self):
         if hasattr(self, 'group_name'): await self.channel_layer.group_discard(self.group_name, self.channel_name)
+
+    async def disconnect(self, close_code):
+        await self.leave_groups()
 
     async def receive_json(self, content):
         msg_text = content.get('message', '').strip()

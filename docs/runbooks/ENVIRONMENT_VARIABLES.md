@@ -126,3 +126,11 @@ unless an embedding site cannot migrate yet and you accept that risk explicitly.
 - Even when acknowledged, `manage.py check --deploy --fail-level WARNING --tag security` (the CI/deploy gate) reports
   `visitors.W001` and fails, and every use logs `widget init used legacy unverified external_id lookup`.
 - Tests: `config/tests_settings_guardrails.py` (`test_unverified_external_id_*`).
+
+## `WS_REVALIDATE_SECONDS`
+
+Default `5`. WebSocket consumers (`common/ws_auth.py`) re-check authorization (user active, exact workspace/platform
+membership and role, workspace/platform/project active, visitor session still valid) before every inbound frame and every
+delivered event, caching a positive result for this many seconds. A user who is deactivated, removed or demoted therefore
+stops sending and receiving within this window (socket closed with code `4403`). `0` checks on every event. The JWT's own
+expiry is enforced at connect time only; a long-lived socket survives token expiry but not permission changes.
