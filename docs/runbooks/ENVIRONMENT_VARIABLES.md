@@ -155,8 +155,10 @@ the owner's approval.
 ## `LEGACY_URL_CREDENTIALS_ENABLED`, `WS_TICKET_TTL_SECONDS`, `WS_AUTH_TIMEOUT_SECONDS`, `WS_TICKET_THROTTLE_RATE`
 
 See `docs/runbooks/WS_TICKETS_AND_URL_CREDENTIALS.md`. `LEGACY_URL_CREDENTIALS_ENABLED` defaults to **off** on staging/production
-(on for local development); turning it on there requires `LEGACY_URL_CREDENTIALS_ACK=accept-credentials-in-urls` and is reported by
-the deploy security gate as `common.W002`. `WS_TICKET_TTL_SECONDS` (30) is the ticket lifetime, `WS_AUTH_TIMEOUT_SECONDS` (10) how
+(on for local development). On staging/production it can only be a **time-boxed, widget-only exception** that needs all of
+`LEGACY_URL_CREDENTIALS_ENABLED=1`, `LEGACY_URL_CREDENTIALS_ACK=accept-credentials-in-urls`, `LEGACY_URL_CREDENTIALS_SCOPE=widget` and
+`LEGACY_URL_CREDENTIALS_UNTIL=YYYY-MM-DD` (UTC, ≤ 21 days away); it ends by itself on that date, the gate shows `common.I002` while
+open and `common.W003` (red) if the variables outlive the date. Never set it without the owner's separate approval. `WS_TICKET_TTL_SECONDS` (30) is the ticket lifetime, `WS_AUTH_TIMEOUT_SECONDS` (10) how
 long an accepted socket may wait for its auth frame, `WS_TICKET_THROTTLE_RATE` (120/min) throttles ticket minting.
 
 ## `WIDGET_REQUIRE_ALLOWED_DOMAINS`

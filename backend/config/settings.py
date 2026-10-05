@@ -354,22 +354,60 @@ if (
 # Referer headers. The supported mechanism is a short-lived single-use ticket sent in the first
 # WebSocket frame (common/ws_tickets.py) and the `X-Widget-Session` header. The legacy URL
 # mechanism is therefore OFF by default on staging/production; it stays on for local development
-# so existing tooling keeps working. Re-enabling it on staging/production (e.g. during a staged
-# client rollout) needs the explicit acknowledgement below, and the deploy security gate
-# (`check --deploy --tag security`) reports common.W002 for as long as it is on.
+# so existing tooling keeps working.
+#
+# The ONLY way to have it on staging/production is a narrow, time-boxed, owner-approved exception
+# for already-published widget bundles that cannot be updated at once (cached or version-pinned on
+# customer sites). Every part of it is mandatory and is checked at startup:
+#   LEGACY_URL_CREDENTIALS_ENABLED=1
+#   LEGACY_URL_CREDENTIALS_ACK=accept-credentials-in-urls   (the owner's explicit approval)
+#   LEGACY_URL_CREDENTIALS_SCOPE=widget                     (visitor session tokens only; staff JWTs in
+#                                                            URLs are never allowed on staging/production)
+#   LEGACY_URL_CREDENTIALS_UNTIL=YYYY-MM-DD                 (UTC, at most MAX_WINDOW_DAYS from today)
+# After that date the legacy routes stop working by themselves (common/legacy_credentials.py), and the
+# deploy gate (`check --deploy --tag security`) goes red (common.W003) until the variables are removed.
 LEGACY_URL_CREDENTIALS_ENABLED = _env_bool('LEGACY_URL_CREDENTIALS_ENABLED', default=not IS_PRODUCTION_LIKE)
 LEGACY_URL_CREDENTIALS_ACK = os.environ.get('LEGACY_URL_CREDENTIALS_ACK', '').strip()
 LEGACY_URL_CREDENTIALS_ACK_VALUE = 'accept-credentials-in-urls'
-if (
-    IS_PRODUCTION_LIKE and LEGACY_URL_CREDENTIALS_ENABLED
-    and LEGACY_URL_CREDENTIALS_ACK != LEGACY_URL_CREDENTIALS_ACK_VALUE
-):
-    raise ImproperlyConfigured(
-        'LEGACY_URL_CREDENTIALS_ENABLED=1 re-enables JWTs/session tokens in WebSocket and query-string URLs '
-        '(they get logged by proxies) and is refused when ENVIRONMENT is staging or production. If a documented '
-        'staged client rollout truly requires it, also set LEGACY_URL_CREDENTIALS_ACK=%s (see '
-        'docs/runbooks/WS_TICKETS_AND_URL_CREDENTIALS.md).' % LEGACY_URL_CREDENTIALS_ACK_VALUE
-    )
+LEGACY_URL_CREDENTIALS_SCOPE = os.environ.get('LEGACY_URL_CREDENTIALS_SCOPE', '').strip()
+LEGACY_URL_CREDENTIALS_MAX_WINDOW_DAYS = 21  # deliberately a constant, not an environment variable
+LEGACY_URL_CREDENTIALS_UNTIL = None  # datetime.date once a valid exception window is configured
+LEGACY_URL_CREDENTIALS_EXPIRED_ON = None  # the lapsed date, if the variables outlived their window
+if IS_PRODUCTION_LIKE and LEGACY_URL_CREDENTIALS_ENABLED:
+    import datetime as _dt
+    _doc = 'docs/runbooks/WS_TICKETS_AND_URL_CREDENTIALS.md'
+    if LEGACY_URL_CREDENTIALS_ACK != LEGACY_URL_CREDENTIALS_ACK_VALUE:
+        raise ImproperlyConfigured(
+            'LEGACY_URL_CREDENTIALS_ENABLED=1 re-enables session tokens in WebSocket and query-string URLs '
+            '(they get logged by proxies) and is refused when ENVIRONMENT is staging or production. If the owner '
+            'approved a time-boxed exception, also set LEGACY_URL_CREDENTIALS_ACK=%s, '
+            'LEGACY_URL_CREDENTIALS_SCOPE=widget and LEGACY_URL_CREDENTIALS_UNTIL=YYYY-MM-DD (see %s).'
+            % (LEGACY_URL_CREDENTIALS_ACK_VALUE, _doc)
+        )
+    if LEGACY_URL_CREDENTIALS_SCOPE != 'widget':
+        raise ImproperlyConfigured(
+            'LEGACY_URL_CREDENTIALS_SCOPE must be exactly "widget": on staging/production only visitor session '
+            'tokens may travel in URLs during the exception; dashboard/staff JWTs never may (see %s).' % _doc
+        )
+    try:
+        _until = _dt.date.fromisoformat(os.environ.get('LEGACY_URL_CREDENTIALS_UNTIL', '').strip())
+    except ValueError:
+        raise ImproperlyConfigured(
+            'LEGACY_URL_CREDENTIALS_UNTIL must be an ISO date (YYYY-MM-DD, UTC): the exception has to end (see %s).' % _doc
+        )
+    _today = _dt.datetime.now(_dt.timezone.utc).date()
+    if _until > _today + _dt.timedelta(days=LEGACY_URL_CREDENTIALS_MAX_WINDOW_DAYS):
+        raise ImproperlyConfigured(
+            'LEGACY_URL_CREDENTIALS_UNTIL=%s is more than %d days away; the exception window is capped (see %s).'
+            % (_until, LEGACY_URL_CREDENTIALS_MAX_WINDOW_DAYS, _doc)
+        )
+    if _until < _today:
+        # A lapsed exception must not take the chat down on a restart: the legacy routes simply stay
+        # OFF, and the deploy gate stays red (common.W003) until the stale variables are removed.
+        LEGACY_URL_CREDENTIALS_ENABLED = False
+        LEGACY_URL_CREDENTIALS_EXPIRED_ON = _until
+    else:
+        LEGACY_URL_CREDENTIALS_UNTIL = _until
 
 # Per-project domain restriction (projects/domains.py). When true, a project with NO allowed_domains is refused
 # instead of being unrestricted. Roll out by filling every project's domains first
