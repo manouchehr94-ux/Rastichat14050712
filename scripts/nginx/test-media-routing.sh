@@ -78,6 +78,7 @@ has_header 'content-range: bytes 0-99/4096' -H 'Range: bytes=0-99' "$U/api/v1/at
 for h in 'cache-control: private, no-store' 'x-content-type-options: nosniff' 'referrer-policy: no-referrer' 'content-type: audio/webm' 'accept-ranges: bytes'; do
   has_header "$h" "$U/api/v1/attachments/ok/?sig=x" && echo "  PASS  header: $h" || { echo "  FAIL  header missing: $h"; fail=1; }
 done
+n=$(curl -s -D - -o /dev/null "$U/api/v1/attachments/ok/?sig=x" | grep -ci "^cache-control:" || true); expect 1 "$n" "exactly one Cache-Control header (no duplicate from nginx)"
 body=$(curl -s -r 0-3 "$U/api/v1/attachments/ok/?sig=x" | wc -c); expect 4 "$body" "Range body length"
 
 echo "== compatibility mode (CHAT_ATTACHMENTS_PUBLIC=1) is the only way the old URLs come back"
