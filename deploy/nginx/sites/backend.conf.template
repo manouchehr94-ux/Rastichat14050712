@@ -69,14 +69,14 @@ server {
     # cache serving a stale or cross-tenant API response would be a real
     # data leak, not just a staleness bug.
     location /api/ {
-        limit_req zone=rastichat_general burst=40 nodelay;
+        limit_req zone=rastichat_general burst=150 nodelay;
         add_header Cache-Control "no-store" always;
         proxy_pass http://127.0.0.1:__BACKEND_PORT__;
         include /etc/nginx/rastichat/snippets/proxy-params.conf;
     }
 
     location /admin/ {
-        limit_req zone=rastichat_general burst=40 nodelay;
+        limit_req zone=rastichat_general burst=150 nodelay;
         add_header Cache-Control "no-store" always;
         proxy_pass http://127.0.0.1:__BACKEND_PORT__;
         include /etc/nginx/rastichat/snippets/proxy-params.conf;
