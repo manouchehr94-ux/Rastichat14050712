@@ -223,6 +223,43 @@ describe('RastiChatWidget', () => {
     );
   });
 
+  describe('signed attachment URLs', () => {
+    const MID = '3f2b8c1e-4d5a-4e6f-9a7b-0c1d2e3f4a5b';
+    const OLD = `http://localhost:8080/api/v1/attachments/${MID}/?sig=old`;
+
+    async function withImageMessage() {
+      const ws = await initWidget();
+      ws.emitMessage({ id: MID, sender_type: 'USER', content: '', message_type: 'IMAGE', metadata: {}, attachment_url: OLD, created_at: '2026-10-05T10:00:00Z' });
+      return document.querySelector('.rasti-img img') as HTMLImageElement;
+    }
+
+    it('swaps in a fresh URL once when the image fails to load (expired signature), authenticated by the session header', async () => {
+      const img = await withImageMessage();
+      expect(img.getAttribute('src')).toBe(OLD);
+      fetchMock.mockImplementation((url: string) => String(url).includes('/attachments/') && String(url).includes('/refresh/')
+        ? jsonResponse({ attachment_url: `http://localhost:8080/api/v1/attachments/${MID}/?sig=new` }) : jsonResponse({}));
+      img.dispatchEvent(new Event('error'));
+      await flushMicrotasks();
+      const call = fetchMock.mock.calls.find((c: unknown[]) => String(c[0]).includes('/refresh/'));
+      expect(String(call[0])).toBe(`http://localhost:8080/api/v1/widget/attachments/${MID}/refresh/`);
+      expect(call[1].headers['X-Widget-Session']).toBe('sess-1');
+      expect(String(call[0])).not.toContain('sess-1');
+      expect(img.getAttribute('src')).toContain('sig=new');
+      img.dispatchEvent(new Event('error')); // fails again: no loop
+      await flushMicrotasks();
+      expect(fetchMock.mock.calls.filter((c: unknown[]) => String(c[0]).includes('/refresh/'))).toHaveLength(1);
+    });
+
+    it('ignores load errors of anything that is not a signed attachment', async () => {
+      const ws = await initWidget();
+      ws.emitMessage({ id: 'p1', sender_type: 'USER', content: '', message_type: 'IMAGE', metadata: {}, attachment_url: 'https://cdn.example/x.png', created_at: '2026-10-05T10:00:00Z' });
+      const img = document.querySelector('.rasti-img img') as HTMLImageElement;
+      img.dispatchEvent(new Event('error'));
+      await flushMicrotasks();
+      expect(fetchMock.mock.calls.some((c: unknown[]) => String(c[0]).includes('/refresh/'))).toBe(false);
+    });
+  });
+
   it('never puts a credential in any URL: ticket-authenticated socket, session in a header', async () => {
     localStorage.setItem('rasti_session', 'SECRET-SESSION');
     const ws = await initWidget();

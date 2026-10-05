@@ -2,6 +2,7 @@ const API_BASE = process.env.NEXT_PUBLIC_API_BASE_URL || 'http://localhost:8080/
 const WS_BASE = process.env.NEXT_PUBLIC_WS_BASE_URL || 'ws://localhost:8080/ws';
 
 import { TicketSocket } from './ticketSocket';
+import { installAttachmentRefresh } from './attachmentRefresh';
 
 export interface SupportSocketMessage { id: string; content: string; sender_type: string; [key: string]: unknown }
 
@@ -18,6 +19,8 @@ export const login = async (email: string, password: string) => {
 };
 
 export const getToken = () => localStorage.getItem('token');
+// signed attachment URLs expire: swap in a fresh one (once) when an <img>/<audio> holding one fails to load
+installAttachmentRefresh(API_BASE, getToken);
 
 export const fetchPlatformInbox = async () => {
     const res = await fetch(`${API_BASE}/platform/support/`, { headers: { 'Authorization': `Bearer ${getToken()}` } });
