@@ -110,6 +110,8 @@ class RastiChatWidget {
     private wsBase = 'ws://localhost:8080/ws';
 
     private renderedIds = new Set<string>();
+    /** Messages typed before the socket was authenticated: shown as pending, sent on `auth.ok` (the server de-duplicates on client_message_id). */
+    private pendingSends: { clientId: string; text: string }[] = [];
     private isOpen = false;
     private unreadCount = 0;
     private typingHideTimer: number | undefined;
@@ -199,6 +201,7 @@ class RastiChatWidget {
                 .rasti-msg.visitor .rasti-bubble { background: #fff; color: #2C211A; border: 1px solid #ECDCC8; border-top-left-radius: 5px; }
                 .rasti-msg.operator .rasti-bubble { background: linear-gradient(135deg, ${this.config.primaryColor}, #9F4427); color: #fff; border-top-right-radius: 5px; }
                 .rasti-meta { font-size: 10px; color: #A08C77; margin: 3px 6px 0; display: flex; align-items: center; gap: 3px; }
+                .rasti-msg.rasti-pending { opacity: .6; }
                 .rasti-tick { font-size: 11px; color: #A08C77; }
                 .rasti-tick.seen { color: #5E8A56; }
                 .rasti-bubble.rasti-img img { max-width: 200px; border-radius: 10px; display: block; cursor: pointer; }
@@ -494,6 +497,7 @@ class RastiChatWidget {
     private dropSocket() {
         window.clearTimeout(this.reconnectTimer);
         this.wsReady = false;
+        this.pendingSends = [];
         if (!this.ws) return;
         this.ws.onclose = null;
         this.ws.close();
@@ -629,6 +633,11 @@ class RastiChatWidget {
                 if (data.type === 'auth.ok') {
                     this.wsReady = true;
                     this.offlineBanner.classList.remove('show');
+                    this.flushPendingSends();
+                    // Anything that arrived before this point (between the first history fetch and auth, or while the
+                    // socket was down) was never delivered to this socket: resync from the server. renderIncoming
+                    // de-duplicates by message id / client_message_id, so frames that race the response are harmless.
+                    void this.loadHistory();
                 }
                 return;
             }
@@ -700,9 +709,24 @@ class RastiChatWidget {
 
     private sendMessage() {
         const text = this.inputField.value.trim();
-        if (!text || !this.canSend()) return;
+        if (!text || !this.convId || !this.sessionToken) return;
 
         const clientId = 'msg_' + Date.now() + '_' + Math.random().toString(36).slice(2, 8);
+        if (!this.canSend()) {
+            // Not authenticated (yet / any more): never drop the message silently. Show it as pending and show the
+            // connection state; it is sent, in order, as soon as the server acknowledges the ticket.
+            if (this.pendingSends.length >= 20) return;
+            this.pendingSends.push({ clientId, text });
+            this.renderIncoming({
+                sender_type: 'VISITOR', content: text, message_type: 'TEXT',
+                client_message_id: clientId, created_at: new Date().toISOString(), seen: false,
+            });
+            (this.messagesContainer.lastElementChild as HTMLElement | null)?.classList.add('rasti-pending');
+            this.offlineBanner.classList.add('show');
+            this.inputField.value = '';
+            this.scrollToBottom();
+            return;
+        }
         this.ws!.send(JSON.stringify({ message: text, client_message_id: clientId }));
 
         this.renderIncoming({
@@ -711,6 +735,15 @@ class RastiChatWidget {
         });
         this.inputField.value = '';
         this.scrollToBottom();
+    }
+
+    private flushPendingSends() {
+        const queued = this.pendingSends;
+        this.pendingSends = [];
+        for (const { clientId, text } of queued) {
+            this.ws!.send(JSON.stringify({ message: text, client_message_id: clientId }));
+        }
+        if (queued.length) this.messagesContainer.querySelectorAll('.rasti-pending').forEach(el => el.classList.remove('rasti-pending'));
     }
 
     private async uploadFile(file: File, messageType: 'IMAGE' | 'VOICE', extra?: Record<string, string>) {
@@ -801,10 +834,10 @@ class RastiChatWidget {
 
     private renderIncoming(data: WireMessage) {
         const cid = data.client_message_id;
-        if (cid) {
-            if (this.renderedIds.has(cid)) return;
-            this.renderedIds.add(cid);
-        }
+        const sid = data.id ? 'id:' + data.id : '';
+        if ((cid && this.renderedIds.has(cid)) || (sid && this.renderedIds.has(sid))) return;
+        if (cid) this.renderedIds.add(cid);
+        if (sid) this.renderedIds.add(sid);
         const html = this.renderMessage(data);
         if (!html) return;
         this.messagesContainer.insertAdjacentHTML('beforeend', html);

@@ -22,6 +22,7 @@ test.describe('P1-3 ticket-authenticated WebSockets (Django 5.2 stack)', () => {
     await sendWidgetText(customer, marker);
     await loginOperator(operator);
     await expect(operator.getByText(marker).last()).toBeVisible({ timeout: 20000 });
+    await operator.getByText(marker).last().click(); // open the conversation (the dashboard does not auto-select one)
     const reply = uniqueText('DJ52-پاسخ');
     await operator.locator('input[placeholder="پاسخ به مشتری…"]').fill(reply);
     await operator.locator('button:has-text("➤")').click();

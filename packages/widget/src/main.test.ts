@@ -238,10 +238,10 @@ describe('RastiChatWidget', () => {
     expect(history[1].headers['X-Widget-Session']).toBe('SECRET-SESSION');
   });
 
-  it('does not let the user send before the server has acknowledged the ticket', async () => {
+  it('F-2: a message typed before auth.ok is not dropped: shown as pending, sent once on auth.ok, input cleared', async () => {
     const original = FakeWebSocket.prototype.send;
     FakeWebSocket.prototype.send = function (this: FakeWebSocket, data: string) {
-      if (JSON.parse(data).type === 'auth') { this.authFrames.push(JSON.parse(data)); return; } // server never answers
+      if (JSON.parse(data).type === 'auth') { this.authFrames.push(JSON.parse(data)); return; } // server never answers on its own
       original.call(this, data);
     };
     try {
@@ -249,15 +249,88 @@ describe('RastiChatWidget', () => {
       const input = document.getElementById('rasti-input') as HTMLInputElement;
       input.value = 'too early';
       document.getElementById('rasti-send')!.click();
+      // nothing goes on the wire before authentication ...
       expect(ws.sent).toHaveLength(0);
+      // ... but the user sees the message as pending, sees the connection state, and the input is cleared
+      expect(input.value).toBe('');
+      expect(document.querySelectorAll('.rasti-msg.rasti-pending')).toHaveLength(1);
+      expect(document.getElementById('rasti-messages')!.textContent).toContain('too early');
+      expect(document.getElementById('rasti-offline-banner')!.classList.contains('show')).toBe(true);
       ws.emitMessage({ type: 'auth.ok' });
+      expect(ws.sent).toHaveLength(1);
+      const frame = JSON.parse(ws.sent[0]);
+      expect(frame.message).toBe('too early');
+      expect(frame.client_message_id).toMatch(/^msg_/);
+      expect(document.querySelectorAll('.rasti-msg.rasti-pending')).toHaveLength(0);
+      expect(document.getElementById('rasti-offline-banner')!.classList.contains('show')).toBe(false);
+      // sent exactly once, in order, and further messages go straight out
       input.value = 'now';
       document.getElementById('rasti-send')!.click();
-      expect(ws.sent).toHaveLength(1);
+      expect(ws.sent.map((f) => JSON.parse(f).message)).toEqual(['too early', 'now']);
     } finally {
       FakeWebSocket.prototype.send = original;
     }
   });
+
+  it('F-2: messages queued while disconnected are flushed in order on the next successful auth', async () => {
+    const ws = await initWidget();
+    ws.close(); // socket down, widget schedules a reconnect
+    const input = document.getElementById('rasti-input') as HTMLInputElement;
+    for (const t of ['one', 'two']) { input.value = t; document.getElementById('rasti-send')!.click(); }
+    expect(ws.sent).toHaveLength(0);
+    await new Promise((r) => setTimeout(r, 2200));
+    const ws2 = FakeWebSocket.instances[FakeWebSocket.instances.length - 1];
+    expect(ws2).not.toBe(ws);
+    await flushMicrotasks();
+    expect(ws2.sent.map((f) => JSON.parse(f).message)).toEqual(['one', 'two']);
+  }, 10000);
+
+  it('F-3: after auth.ok the history is re-fetched, so a message sent between the first load and auth is not lost (and not duplicated)', async () => {
+    let historyCalls = 0;
+    fetchMock.mockImplementation((url: string) => {
+      if (url.includes('/widget/init/')) return jsonResponse({ session_token: 'sess-1' });
+      if (url.includes('/widget/start/')) return jsonResponse({ id: 'conv-1' });
+      if (url.includes('/widget/ws-ticket/')) return jsonResponse({ ticket: 'ticket-1' });
+      if (url.includes('/messages/')) {
+        historyCalls += 1;
+        // the staff reply exists only from the second fetch on: it was created after the first history response
+        return jsonResponse(historyCalls === 1 ? [] : [{ id: 'm-1', sender_type: 'USER', content: 'reply during the gap', message_type: 'TEXT', created_at: '2026-01-01T00:00:00Z' }]);
+      }
+      return jsonResponse({});
+    });
+    const ws = await initWidget();
+    await flushMicrotasks();
+    expect(historyCalls).toBeGreaterThanOrEqual(2);
+    const text = () => document.getElementById('rasti-messages')!.textContent!;
+    expect(text().split('reply during the gap')).toHaveLength(2); // exactly once
+    // the same reply also arriving live (race with the history response) must not be rendered again
+    ws.emitMessage({ id: 'm-1', sender_type: 'USER', content: 'reply during the gap', message_type: 'TEXT', created_at: '2026-01-01T00:00:00Z' });
+    expect(text().split('reply during the gap')).toHaveLength(2);
+  });
+
+  it('F-3: after a reconnect the history is fetched again and the reply that arrived during the outage appears', async () => {
+    let messages: unknown[] = [];
+    fetchMock.mockImplementation((url: string) => {
+      if (url.includes('/widget/init/')) return jsonResponse({ session_token: 'sess-1' });
+      if (url.includes('/widget/start/')) return jsonResponse({ id: 'conv-1' });
+      if (url.includes('/widget/ws-ticket/')) return jsonResponse({ ticket: 'ticket-1' });
+      if (url.includes('/messages/')) return jsonResponse(messages);
+      return jsonResponse({});
+    });
+    const ws = await initWidget();
+    ws.emitMessage({ id: 'a', sender_type: 'USER', content: 'before outage', message_type: 'TEXT', created_at: '2026-01-01T00:00:00Z' });
+    ws.close();
+    messages = [
+      { id: 'a', sender_type: 'USER', content: 'before outage', message_type: 'TEXT', created_at: '2026-01-01T00:00:00Z' },
+      { id: 'b', sender_type: 'USER', content: 'during outage', message_type: 'TEXT', created_at: '2026-01-01T00:00:05Z' },
+    ];
+    expect(document.getElementById('rasti-messages')!.textContent).not.toContain('during outage');
+    await new Promise((r) => setTimeout(r, 2200));
+    await flushMicrotasks();
+    const text = document.getElementById('rasti-messages')!.textContent!;
+    expect(text.split('during outage')).toHaveLength(2);
+    expect(text.split('before outage')).toHaveLength(2);
+  }, 10000);
 
   it('fetches a fresh ticket for every reconnect and recovers a rejected one via session recovery', async () => {
     const ws = await initWidget();
