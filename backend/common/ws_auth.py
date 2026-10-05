@@ -20,6 +20,7 @@ import time
 
 from django.conf import settings
 
+from . import legacy_credentials
 from .ws_tickets import consume_ticket
 
 CLOSE_CODE_REVOKED = 4403
@@ -67,7 +68,7 @@ class RevalidatingConsumerMixin:
 
 class TicketAuthMixin:
     """Authenticate a socket with a single-use ticket sent in its FIRST frame (no credential in
-    the URL), while — only when `settings.LEGACY_URL_CREDENTIALS_ENABLED` — still serving the
+    the URL), while — only while `common.legacy_credentials.allowed(surface)` — still serving the
     legacy token-in-path routes.
 
     A ticket-mode socket is accepted but unauthenticated: it joins NO channel-layer group and
@@ -84,6 +85,7 @@ class TicketAuthMixin:
     _auth_deadline_task = None
 
     LEGACY_ROUTE_KWARGS = ('token', 'session_token')
+    LEGACY_SURFACE = legacy_credentials.SURFACE_DASHBOARD  # the widget consumer overrides this
 
     def is_ticket_mode(self):
         kwargs = self.scope['url_route']['kwargs']
@@ -97,7 +99,7 @@ class TicketAuthMixin:
             await self.accept()
             self._auth_deadline_task = asyncio.ensure_future(self._close_unless_authenticated())
             return
-        if not settings.LEGACY_URL_CREDENTIALS_ENABLED:
+        if not legacy_credentials.allowed(self.LEGACY_SURFACE):
             await self.close(code=4401)
             return
         await self.legacy_connect()

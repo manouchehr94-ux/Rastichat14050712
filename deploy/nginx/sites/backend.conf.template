@@ -47,7 +47,8 @@ server {
     gzip_types application/json application/javascript text/css;
     gzip_min_length 1024;
 
-    access_log /var/log/nginx/rastichat-backend-access.log;
+    # rastichat_redacted (conf.d/rastichat-log-redaction.conf): no URL credentials / query strings in this log.
+    access_log /var/log/nginx/rastichat-backend-access.log rastichat_redacted;
     error_log  /var/log/nginx/rastichat-backend-error.log;
 
     location /ws/ {
