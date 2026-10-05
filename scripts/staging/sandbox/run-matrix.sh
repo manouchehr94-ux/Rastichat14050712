@@ -34,6 +34,7 @@ stage 01-migrate-empty-db bash -c ". $S/stg/backend.env; su postgres -c 'dropdb 
 # ---------------------------------------------------------------- unit / integration
 stage 02-backend-tests bash -c "export DATABASE_URL=postgres://rasti:rasti@127.0.0.1/rasti REDIS_URL=redis://127.0.0.1:6379/0 DJANGO_SECRET_KEY=test-secret-key-for-local-only-xxxxxxxxxxxxxxxxxxxxxxxx; unset ENVIRONMENT DJANGO_SETTINGS_MODULE MONITORING_TOKEN; cd $R/backend && $PY manage.py test --parallel 4 --noinput"
 stage 03-js-unit-and-typecheck bash -c "set -e; for d in packages/widget apps/operator-dashboard apps/platform-dashboard; do echo \"=== \$d\"; (cd $R/\$d && npx vitest run 2>&1 | tail -8 && npx tsc --noEmit && echo 'typecheck ok'); done"
+stage 03b-build-widget bash -c "cd $R/packages/widget && npx vite build && cp dist/widget.iife.js /srv/stg/widgetroot/widget.js && ls -l /srv/stg/widgetroot/widget.js"
 stage 04-nginx-media-routing bash $R/scripts/nginx/test-media-routing.sh
 stage 05-nginx-log-redaction bash $R/scripts/nginx/test-log-redaction.sh
 
