@@ -1,5 +1,6 @@
 from django.urls import path, include
 from rest_framework.routers import DefaultRouter
+from visitors.urls import session_urlpatterns
 from common.views import HealthCheckView, LivenessView, MonitoringView, ReadinessView
 from conversations.views import (
     CustomerConversationViewSet, PlatformSupportViewSet, WorkspaceSupportViewSet,
@@ -7,6 +8,7 @@ from conversations.views import (
     WidgetMessageListView, WidgetMarkReadView, WidgetUploadView, WidgetRateConversationView,
     WidgetBrandingView, OperationalSummaryView,
 )
+from conversations.ws_ticket_views import DashboardWsTicketView, WidgetWsTicketView
 from catalog.views import ProductViewSet
 from customer_context.views import (
     TagViewSet, ConversationTagsView, ConversationNotesView, CustomerContextView,
@@ -53,7 +55,10 @@ urlpatterns = [
     path('health/ready/', ReadinessView.as_view(), name='health-ready'),
     path('health/monitoring/', MonitoringView.as_view(), name='health-monitoring'),
     path('widget/init/', include('visitors.urls')),
+    path('widget/session/', include((session_urlpatterns, 'visitors-session'))),
     path('widget/start/', StartCustomerChatView.as_view(), name='widget-start'),
+    path('widget/ws-ticket/', WidgetWsTicketView.as_view(), name='widget-ws-ticket'),
+    path('ws/ticket/', DashboardWsTicketView.as_view(), name='ws-ticket'),
     # These three must be resolved BEFORE the router include below: the
     # `macros` viewset is registered at the bare `macros` prefix (unlike
     # e.g. `automations/rules` or `kb/articles`), so its detail route

@@ -128,6 +128,91 @@ class StagingFailFastTests(SimpleTestCase):
         self.assertEqual(gate.returncode, 0, gate.stderr)
         self.assertNotIn('visitors.W001', gate.stderr + gate.stdout)
 
+    def test_legacy_url_credentials_default_off_in_staging(self):
+        # the shared baseline sets neither variable: the dangerous mechanism must be OFF by default
+        import os, subprocess, sys
+        env = {'PATH': os.environ.get('PATH', ''), **VALID_STAGING_ENV}
+        out = subprocess.run(
+            [sys.executable, '-c',
+             'import django,os;os.environ.setdefault("DJANGO_SETTINGS_MODULE","config.settings");django.setup();'
+             'from django.conf import settings;print(settings.LEGACY_URL_CREDENTIALS_ENABLED)'],
+            cwd=BASE_DIR, env=env, capture_output=True, text=True, timeout=60)
+        self.assertEqual(out.stdout.strip().splitlines()[-1], 'False', out.stderr)
+
+    def test_legacy_url_credentials_without_ack_fails_startup(self):
+        result = run_check({'LEGACY_URL_CREDENTIALS_ENABLED': '1'})
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn('LEGACY_URL_CREDENTIALS_ENABLED', result.stderr)
+        self.assertIn('LEGACY_URL_CREDENTIALS_ACK', result.stderr)
+
+    def test_legacy_url_credentials_wrong_ack_fails_startup(self):
+        result = run_check({'LEGACY_URL_CREDENTIALS_ENABLED': '1', 'LEGACY_URL_CREDENTIALS_ACK': 'true'})
+        self.assertNotEqual(result.returncode, 0)
+
+    # --- the time-boxed, widget-only legacy exception (see common/legacy_credentials.py)
+    @staticmethod
+    def _exception_env(days_from_today=7, **over):
+        import datetime
+        until = datetime.datetime.now(datetime.timezone.utc).date() + datetime.timedelta(days=days_from_today)
+        env = {
+            'LEGACY_URL_CREDENTIALS_ENABLED': '1',
+            'LEGACY_URL_CREDENTIALS_ACK': 'accept-credentials-in-urls',
+            'LEGACY_URL_CREDENTIALS_SCOPE': 'widget',
+            'LEGACY_URL_CREDENTIALS_UNTIL': until.isoformat(),
+        }
+        env.update(over)
+        return env
+
+    GATE = ['--deploy', '--fail-level', 'WARNING', '--tag', 'security']
+
+    def test_legacy_exception_without_scope_or_with_dashboard_scope_fails_startup(self):
+        for scope in (None, 'dashboard', 'widget,dashboard', 'all'):
+            result = run_check(self._exception_env(LEGACY_URL_CREDENTIALS_SCOPE=scope))
+            self.assertNotEqual(result.returncode, 0, scope)
+            self.assertIn('LEGACY_URL_CREDENTIALS_SCOPE', result.stderr)
+
+    def test_legacy_exception_needs_a_valid_end_date_within_the_cap(self):
+        for until in (None, '', 'soon', '2026-13-45'):
+            result = run_check(self._exception_env(LEGACY_URL_CREDENTIALS_UNTIL=until))
+            self.assertNotEqual(result.returncode, 0, until)
+            self.assertIn('LEGACY_URL_CREDENTIALS_UNTIL', result.stderr)
+        too_far = run_check(self._exception_env(days_from_today=22))
+        self.assertNotEqual(too_far.returncode, 0)
+        self.assertIn('capped', too_far.stderr)
+        self.assertEqual(run_check(self._exception_env(days_from_today=21)).returncode, 0)
+
+    def test_legacy_exception_inside_its_window_starts_and_the_gate_reports_it_without_hiding_it(self):
+        env = self._exception_env()
+        self.assertEqual(run_check(env).returncode, 0)
+        gate = run_check(env, extra_args=self.GATE)
+        # Info, not Warning: visible in every gate run and deploy log, bounded by the end date
+        self.assertEqual(gate.returncode, 0, gate.stderr)
+        self.assertIn('common.I002', gate.stderr + gate.stdout)
+        self.assertIn('TEMPORARY EXCEPTION ACTIVE', gate.stderr + gate.stdout)
+
+    def test_expired_legacy_exception_is_off_and_turns_the_gate_red_until_cleaned_up(self):
+        import os
+        env = self._exception_env(days_from_today=-1)
+        # it must not take the service down on a restart...
+        self.assertEqual(run_check(env).returncode, 0)
+        out = subprocess.run(
+            [sys.executable, '-c',
+             'import django,os;os.environ.setdefault("DJANGO_SETTINGS_MODULE","config.settings");django.setup();'
+             'from django.conf import settings;from common import legacy_credentials as l;'
+             'print(settings.LEGACY_URL_CREDENTIALS_ENABLED, l.allowed("widget"), l.allowed("dashboard"))'],
+            cwd=BASE_DIR, env={'PATH': os.environ.get('PATH', ''), **VALID_STAGING_ENV, **env},
+            capture_output=True, text=True, timeout=60)
+        self.assertEqual(out.stdout.strip().splitlines()[-1], 'False False False', out.stderr)
+        # ...but it must not stay quietly configured either
+        gate = run_check(env, extra_args=self.GATE)
+        self.assertNotEqual(gate.returncode, 0)
+        self.assertIn('common.W003', gate.stderr + gate.stdout)
+
+    def test_no_exception_configured_gate_is_green_and_silent(self):
+        gate = run_check({}, extra_args=self.GATE)
+        self.assertEqual(gate.returncode, 0, gate.stderr)
+        self.assertNotIn('common.I002', gate.stderr + gate.stdout)
+
     def test_invalid_environment_value_fails(self):
         result = run_check({'ENVIRONMENT': 'not-a-real-environment'})
         self.assertNotEqual(result.returncode, 0)

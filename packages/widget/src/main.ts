@@ -2,7 +2,7 @@ export {};
 
 declare global {
     interface Window {
-        RastiChat: { init: (config: RastiChatConfig) => void };
+        RastiChat: { init: (config: RastiChatConfig) => void; logout: () => Promise<void> };
     }
 }
 
@@ -102,6 +102,8 @@ class RastiChatWidget {
     private noticeHideTimer: number | undefined;
 
     private ws: WebSocket | null = null;
+    private wsReady = false;
+    private reconnectTimer: number | undefined;
     private sessionToken: string | null = null;
     private convId: string | null = null;
     private apiBase = 'http://localhost:8080/api/v1';
@@ -119,6 +121,7 @@ class RastiChatWidget {
     private recordTimer: number | undefined;
     private recordCancelled = false;
     private branding: Branding | null = null;
+    private recoveringSession = false;
 
     constructor(config: RastiChatConfig) {
         this.config = { position: 'right', primaryColor: '#BC5A38', ...config };
@@ -444,14 +447,7 @@ class RastiChatWidget {
             if (stored) {
                 this.sessionToken = stored;
             } else {
-                const res = await fetch(`${this.apiBase}/widget/init/`, {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ project_key: this.config.projectKey })
-                });
-                const data = await res.json();
-                this.sessionToken = data.session_token;
-                localStorage.setItem('rasti_session', this.sessionToken!);
+                await this.createSession();
             }
             await this.startChat();
         } catch (error) {
@@ -459,16 +455,104 @@ class RastiChatWidget {
         }
     }
 
-    private async startChat() {
+    private async createSession() {
+        const res = await fetch(`${this.apiBase}/widget/init/`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ project_key: this.config.projectKey })
+        });
+        const data = await res.json();
+        this.sessionToken = data.session_token;
+        localStorage.setItem('rasti_session', this.sessionToken!);
+    }
+
+    /**
+     * The server says our session is unknown / expired / revoked (HTTP 401).
+     * Drop the dead credential and open a fresh guest session — once, so an
+     * unreachable or misconfigured server can never loop us.
+     */
+    private async recoverFromInvalidSession(): Promise<boolean> {
+        if (this.recoveringSession) return false;
+        this.recoveringSession = true;
+        try {
+            localStorage.removeItem('rasti_session');
+            this.sessionToken = null;
+            this.convId = null;
+            this.dropSocket();
+            this.renderedIds.clear();
+            await this.createSession();
+            return true;
+        } catch (error) {
+            console.error("RastiChat session recovery failed", error);
+            return false;
+        } finally {
+            this.recoveringSession = false;
+        }
+    }
+
+    /** Close the socket without letting its onclose handler schedule a reconnect. */
+    private dropSocket() {
+        window.clearTimeout(this.reconnectTimer);
+        this.wsReady = false;
+        if (!this.ws) return;
+        this.ws.onclose = null;
+        this.ws.close();
+        this.ws = null;
+    }
+
+    /** Swap the stored session token for a fresh one (the server marks it due). */
+    private async rotateSession() {
+        if (!this.sessionToken) return;
+        try {
+            const res = await fetch(`${this.apiBase}/widget/session/rotate/`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ session_token: this.sessionToken })
+            });
+            if (!res.ok) return;
+            const data = await res.json();
+            if (!data.session_token) return;
+            this.sessionToken = data.session_token;
+            localStorage.setItem('rasti_session', this.sessionToken!);
+        } catch (error) {
+            console.error("RastiChat session rotation failed", error);
+        }
+    }
+
+    /** Customer logout: revoke the session server-side and forget it locally. */
+    public async logout() {
+        const token = this.sessionToken;
+        localStorage.removeItem('rasti_session');
+        this.sessionToken = null;
+        this.convId = null;
+        this.dropSocket();
+        if (!token) return;
+        try {
+            await fetch(`${this.apiBase}/widget/session/revoke/`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ session_token: token })
+            });
+        } catch (error) {
+            console.error("RastiChat logout failed", error);
+        }
+    }
+
+    private async startChat(allowRecovery = true) {
         try {
             const res = await fetch(`${this.apiBase}/widget/start/`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ session_token: this.sessionToken })
             });
+            if (res.status === 401 && allowRecovery) {
+                if (await this.recoverFromInvalidSession()) await this.startChat(false);
+                return;
+            }
             const data = await res.json();
             this.convId = data.id;
             this.applyBranding(data.branding);
+            if (data.rotate_session) await this.rotateSession();
             this.connectWebSocket();
             await this.loadHistory();
         } catch (error) {
@@ -479,7 +563,11 @@ class RastiChatWidget {
     private async loadHistory() {
         if (!this.convId || !this.sessionToken) return;
         try {
-            const res = await fetch(`${this.apiBase}/widget/conversations/${this.convId}/messages/?session_token=${this.sessionToken}`);
+            // the credential travels in a header, never in the URL (URLs get logged by proxies)
+            const res = await fetch(`${this.apiBase}/widget/conversations/${this.convId}/messages/`, {
+                headers: { 'X-Widget-Session': this.sessionToken },
+            });
+            if (res.status === 401) { if (await this.recoverFromInvalidSession()) await this.startChat(false); return; }
             if (!res.ok) return;
             const msgs: WireMessage[] = await res.json();
             msgs.forEach(m => this.renderIncoming(m));
@@ -489,17 +577,61 @@ class RastiChatWidget {
         }
     }
 
-    private connectWebSocket() {
+    private canSend(): boolean {
+        return !!this.ws && this.wsReady && this.ws.readyState === WebSocket.OPEN;
+    }
+
+    private scheduleReconnect() {
+        window.clearTimeout(this.reconnectTimer);
+        this.reconnectTimer = window.setTimeout(() => { void this.connectWebSocket(); }, 2000);
+    }
+
+    /**
+     * Open the live connection. No credential is placed in the URL: a short-lived single-use
+     * ticket is minted over REST (session credential in a header) and sent as the first frame.
+     * The socket only counts as ready once the server answers `auth.ok`.
+     */
+    private async connectWebSocket() {
         if (!this.convId || !this.sessionToken) return;
+        const convId = this.convId;
+        let ticket: string;
+        try {
+            const res = await fetch(`${this.apiBase}/widget/ws-ticket/`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json', 'X-Widget-Session': this.sessionToken },
+                body: JSON.stringify({ conversation_id: convId }),
+            });
+            if (res.status === 401) {
+                if (await this.recoverFromInvalidSession()) await this.startChat(false);
+                return;
+            }
+            if (!res.ok) throw new Error(`ticket request failed (${res.status})`);
+            ticket = (await res.json()).ticket;
+        } catch (error) {
+            console.error("RastiChat realtime ticket failed", error);
+            this.offlineBanner.classList.add('show');
+            this.scheduleReconnect();
+            return;
+        }
+        if (this.convId !== convId) return; // the session was replaced while the ticket was in flight
 
-        this.ws = new WebSocket(`${this.wsBase}/widget/${this.sessionToken}/${this.convId}/`);
+        const ws = new WebSocket(`${this.wsBase}/v2/widget/${convId}/`);
+        this.ws = ws;
+        this.wsReady = false;
 
-        this.ws.onopen = () => {
-            this.offlineBanner.classList.remove('show');
+        ws.onopen = () => {
+            ws.send(JSON.stringify({ type: 'auth', ticket }));
         };
 
-        this.ws.onmessage = (event) => {
+        ws.onmessage = (event) => {
             const data: WireMessage = JSON.parse(event.data);
+            if (!this.wsReady) {
+                if (data.type === 'auth.ok') {
+                    this.wsReady = true;
+                    this.offlineBanner.classList.remove('show');
+                }
+                return;
+            }
             if (data.type === 'typing') {
                 if (data.sender_type === 'USER') this.showTyping();
                 return;
@@ -525,9 +657,10 @@ class RastiChatWidget {
             this.scrollToBottom();
         };
 
-        this.ws.onclose = () => {
+        ws.onclose = () => {
+            this.wsReady = false;
             this.offlineBanner.classList.add('show');
-            setTimeout(() => this.connectWebSocket(), 2000);
+            this.scheduleReconnect();
         };
     }
 
@@ -550,14 +683,14 @@ class RastiChatWidget {
         const now = Date.now();
         if (now - this.lastTypingSentAt < 1500) return;
         this.lastTypingSentAt = now;
-        if (this.ws && this.ws.readyState === WebSocket.OPEN) {
-            this.ws.send(JSON.stringify({ type: 'typing' }));
+        if (this.canSend()) {
+            this.ws!.send(JSON.stringify({ type: 'typing' }));
         }
     }
 
     private sendMarkRead() {
-        if (this.ws && this.ws.readyState === WebSocket.OPEN) {
-            this.ws.send(JSON.stringify({ type: 'mark_read' }));
+        if (this.canSend()) {
+            this.ws!.send(JSON.stringify({ type: 'mark_read' }));
         }
     }
 
@@ -567,10 +700,10 @@ class RastiChatWidget {
 
     private sendMessage() {
         const text = this.inputField.value.trim();
-        if (!text || !this.ws || this.ws.readyState !== WebSocket.OPEN) return;
+        if (!text || !this.canSend()) return;
 
         const clientId = 'msg_' + Date.now() + '_' + Math.random().toString(36).slice(2, 8);
-        this.ws.send(JSON.stringify({ message: text, client_message_id: clientId }));
+        this.ws!.send(JSON.stringify({ message: text, client_message_id: clientId }));
 
         this.renderIncoming({
             sender_type: 'VISITOR', content: text, message_type: 'TEXT',
@@ -775,8 +908,14 @@ class RastiChatWidget {
     }
 }
 
+let activeWidget: RastiChatWidget | null = null;
+
 window.RastiChat = {
     init: (config: RastiChatConfig) => {
-        new RastiChatWidget(config);
+        activeWidget = new RastiChatWidget(config);
+    },
+    /** Revoke the customer's session (call when the shopper logs out of the store). */
+    logout: async () => {
+        await activeWidget?.logout();
     }
 };

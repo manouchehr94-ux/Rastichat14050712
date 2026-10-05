@@ -109,6 +109,10 @@ if IS_PRODUCTION_LIKE and not CSRF_TRUSTED_ORIGINS:
         '(e.g. "https://operator-chat-staging.rastisi.ir,https://platform-chat-staging.rastisi.ir").'
     )
 
+# The widget sends its session credential in this header (instead of the URL) —
+# browsers only allow it on cross-origin calls if it is listed here.
+from corsheaders.defaults import default_headers as _cors_default_headers
+CORS_ALLOW_HEADERS = list(_cors_default_headers) + ['x-widget-session']
 CORS_ALLOWED_ORIGINS = _env_list('CORS_ALLOWED_ORIGINS')
 if IS_PRODUCTION_LIKE and not CORS_ALLOWED_ORIGINS:
     raise ImproperlyConfigured(
@@ -345,11 +349,82 @@ if (
         'truly requires it, also set WIDGET_UNVERIFIED_EXTERNAL_ID_ACK=%s (see '
         'docs/runbooks/WIDGET_IDENTITY_MIGRATION.md).' % WIDGET_UNVERIFIED_EXTERNAL_ID_ACK_VALUE
     )
+# Credentials in URLs (a 60-minute JWT or a visitor session token in the WebSocket path, or
+# `?session_token=` on widget REST calls) end up in proxy access logs, browser history and
+# Referer headers. The supported mechanism is a short-lived single-use ticket sent in the first
+# WebSocket frame (common/ws_tickets.py) and the `X-Widget-Session` header. The legacy URL
+# mechanism is therefore OFF by default on staging/production; it stays on for local development
+# so existing tooling keeps working.
+#
+# The ONLY way to have it on staging/production is a narrow, time-boxed, owner-approved exception
+# for already-published widget bundles that cannot be updated at once (cached or version-pinned on
+# customer sites). Every part of it is mandatory and is checked at startup:
+#   LEGACY_URL_CREDENTIALS_ENABLED=1
+#   LEGACY_URL_CREDENTIALS_ACK=accept-credentials-in-urls   (the owner's explicit approval)
+#   LEGACY_URL_CREDENTIALS_SCOPE=widget                     (visitor session tokens only; staff JWTs in
+#                                                            URLs are never allowed on staging/production)
+#   LEGACY_URL_CREDENTIALS_UNTIL=YYYY-MM-DD                 (UTC, at most MAX_WINDOW_DAYS from today)
+# After that date the legacy routes stop working by themselves (common/legacy_credentials.py), and the
+# deploy gate (`check --deploy --tag security`) goes red (common.W003) until the variables are removed.
+LEGACY_URL_CREDENTIALS_ENABLED = _env_bool('LEGACY_URL_CREDENTIALS_ENABLED', default=not IS_PRODUCTION_LIKE)
+LEGACY_URL_CREDENTIALS_ACK = os.environ.get('LEGACY_URL_CREDENTIALS_ACK', '').strip()
+LEGACY_URL_CREDENTIALS_ACK_VALUE = 'accept-credentials-in-urls'
+LEGACY_URL_CREDENTIALS_SCOPE = os.environ.get('LEGACY_URL_CREDENTIALS_SCOPE', '').strip()
+LEGACY_URL_CREDENTIALS_MAX_WINDOW_DAYS = 21  # deliberately a constant, not an environment variable
+LEGACY_URL_CREDENTIALS_UNTIL = None  # datetime.date once a valid exception window is configured
+LEGACY_URL_CREDENTIALS_EXPIRED_ON = None  # the lapsed date, if the variables outlived their window
+if IS_PRODUCTION_LIKE and LEGACY_URL_CREDENTIALS_ENABLED:
+    import datetime as _dt
+    _doc = 'docs/runbooks/WS_TICKETS_AND_URL_CREDENTIALS.md'
+    if LEGACY_URL_CREDENTIALS_ACK != LEGACY_URL_CREDENTIALS_ACK_VALUE:
+        raise ImproperlyConfigured(
+            'LEGACY_URL_CREDENTIALS_ENABLED=1 re-enables session tokens in WebSocket and query-string URLs '
+            '(they get logged by proxies) and is refused when ENVIRONMENT is staging or production. If the owner '
+            'approved a time-boxed exception, also set LEGACY_URL_CREDENTIALS_ACK=%s, '
+            'LEGACY_URL_CREDENTIALS_SCOPE=widget and LEGACY_URL_CREDENTIALS_UNTIL=YYYY-MM-DD (see %s).'
+            % (LEGACY_URL_CREDENTIALS_ACK_VALUE, _doc)
+        )
+    if LEGACY_URL_CREDENTIALS_SCOPE != 'widget':
+        raise ImproperlyConfigured(
+            'LEGACY_URL_CREDENTIALS_SCOPE must be exactly "widget": on staging/production only visitor session '
+            'tokens may travel in URLs during the exception; dashboard/staff JWTs never may (see %s).' % _doc
+        )
+    try:
+        _until = _dt.date.fromisoformat(os.environ.get('LEGACY_URL_CREDENTIALS_UNTIL', '').strip())
+    except ValueError:
+        raise ImproperlyConfigured(
+            'LEGACY_URL_CREDENTIALS_UNTIL must be an ISO date (YYYY-MM-DD, UTC): the exception has to end (see %s).' % _doc
+        )
+    _today = _dt.datetime.now(_dt.timezone.utc).date()
+    if _until > _today + _dt.timedelta(days=LEGACY_URL_CREDENTIALS_MAX_WINDOW_DAYS):
+        raise ImproperlyConfigured(
+            'LEGACY_URL_CREDENTIALS_UNTIL=%s is more than %d days away; the exception window is capped (see %s).'
+            % (_until, LEGACY_URL_CREDENTIALS_MAX_WINDOW_DAYS, _doc)
+        )
+    if _until < _today:
+        # A lapsed exception must not take the chat down on a restart: the legacy routes simply stay
+        # OFF, and the deploy gate stays red (common.W003) until the stale variables are removed.
+        LEGACY_URL_CREDENTIALS_ENABLED = False
+        LEGACY_URL_CREDENTIALS_EXPIRED_ON = _until
+    else:
+        LEGACY_URL_CREDENTIALS_UNTIL = _until
+
+# WebSocket ticket lifetime and how long an accepted-but-unauthenticated socket may wait for its auth frame.
+WS_TICKET_TTL_SECONDS = int(os.environ.get('WS_TICKET_TTL_SECONDS', 30))
+WS_AUTH_TIMEOUT_SECONDS = float(os.environ.get('WS_AUTH_TIMEOUT_SECONDS', 10))
+
 # How long (seconds) a WebSocket's authorization result is cached before the
 # consumer re-checks it against the database (see common/ws_auth.py). This is
 # the maximum time a user who was deactivated / removed / demoted can still
 # receive events on an already-open socket. 0 = check on every event.
 WS_REVALIDATE_SECONDS = int(os.environ.get('WS_REVALIDATE_SECONDS', 5))
+# Visitor (customer) session lifecycle — see visitors/sessions.py. A session is valid
+# until `expires_at` (sliding: renewed on use up to the absolute max age), until it is
+# revoked (logout) or its token is rotated. Expiry never deletes the Visitor or their
+# conversations; an expired session only stops granting access to them.
+VISITOR_SESSION_TTL_DAYS = int(os.environ.get('VISITOR_SESSION_TTL_DAYS', 30))
+VISITOR_SESSION_MAX_AGE_DAYS = int(os.environ.get('VISITOR_SESSION_MAX_AGE_DAYS', 180))
+VISITOR_SESSION_ROTATE_AFTER_HOURS = int(os.environ.get('VISITOR_SESSION_ROTATE_AFTER_HOURS', 24))
 WIDGET_WS_MESSAGE_RATE_LIMIT = int(os.environ.get('WIDGET_WS_MESSAGE_RATE_LIMIT', 30))
 WIDGET_WS_MESSAGE_RATE_WINDOW_SECONDS = int(os.environ.get('WIDGET_WS_MESSAGE_RATE_WINDOW_SECONDS', 60))
 
@@ -428,6 +503,8 @@ REST_FRAMEWORK = {
         'login': None if TESTING else os.environ.get('LOGIN_THROTTLE_RATE', '10/min'),
         'widget_start': None if TESTING else os.environ.get('WIDGET_START_THROTTLE_RATE', '20/min'),
         'widget_message': None if TESTING else os.environ.get('WIDGET_MESSAGE_THROTTLE_RATE', '60/min'),
+        'ws_ticket': None if TESTING else os.environ.get('WS_TICKET_THROTTLE_RATE', '120/min'),
+        'widget_session': None if TESTING else os.environ.get('WIDGET_SESSION_THROTTLE_RATE', '30/min'),
         'widget_rating': None if TESTING else os.environ.get('WIDGET_RATING_THROTTLE_RATE', '20/min'),
         'kb_feedback': None if TESTING else os.environ.get('KB_FEEDBACK_THROTTLE_RATE', '20/min'),
         'kb_search': None if TESTING else os.environ.get('KB_SEARCH_THROTTLE_RATE', '60/min'),
