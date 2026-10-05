@@ -46,6 +46,12 @@ def _broadcast(conv_id, message_data, group_prefix='chat'):
     )
 
 
+def _broadcast_payload(msg, request):
+    """What every socket in the room receives. An attachment URL in it cannot be bound to one recipient, so it carries the
+    conversation-visitor audience (see attachment_access); the dashboards ask for their own URL when a message arrives."""
+    return MessageSerializer(msg, context={'request': request, 'attachment_audience': ('c', None)}).data
+
+
 def _broadcast_seen(conv_id, reader, group_prefix='chat'):
     async_to_sync(get_channel_layer().group_send)(
         f"{group_prefix}_{conv_id}", {'type': 'message.seen', 'reader': reader}
@@ -346,7 +352,7 @@ class CustomerConversationViewSet(
             metadata=metadata, attachment=file,
         )
         data = MessageSerializer(msg, context={'request': request}).data
-        _broadcast(conv.id, data)
+        _broadcast(conv.id, _broadcast_payload(msg, request))
         return Response(data, status=201)
 
     @action(detail=True, methods=['post'])
@@ -571,7 +577,7 @@ class WidgetUploadView(APIView):
             metadata=metadata, attachment=file,
         )
         data = MessageSerializer(msg, context={'request': request}).data
-        _broadcast(conv.id, data)
+        _broadcast(conv.id, _broadcast_payload(msg, request))
         return Response(data, status=201)
 
 class WidgetRateConversationView(APIView):
