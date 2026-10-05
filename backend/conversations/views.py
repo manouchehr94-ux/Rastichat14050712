@@ -16,7 +16,7 @@ from common.pagination import StandardPagination
 from common.permissions import IsWorkspaceOperator, IsWorkspaceAdmin, IsPlatformSupportAgent, user_can_supervise_workspace
 from common.tenancy import resolve_operator_workspace, resolve_admin_workspace, admin_workspace_ids
 from visitors.models import Visitor, VisitorSession
-from visitors.sessions import get_valid_session, extract_session_token, rotation_due
+from visitors.sessions import get_valid_session, get_request_session, extract_session_token, rotation_due
 from catalog.models import Product
 from teams.models import TeamMembership
 from django.contrib.auth import get_user_model
@@ -400,7 +400,7 @@ class StartCustomerChatView(APIView):
     def post(self, request):
         from django.core.exceptions import ValidationError
         from django.db import transaction
-        session = get_valid_session(extract_session_token(request))
+        session = get_request_session(request)
         if session is None:
             return Response({'error': 'Invalid session', 'code': 'session_invalid'}, status=status.HTTP_401_UNAUTHORIZED)
         with transaction.atomic():
@@ -476,8 +476,8 @@ class WidgetSessionInvalid(Exception):
     """The visitor session is unknown, expired, revoked, rotated away or its project is inactive."""
 
 
-def _get_visitor_conversation(session_token, conv_id):
-    session = get_valid_session(session_token)
+def _get_visitor_conversation(request, conv_id):
+    session = get_request_session(request)
     if session is None:
         raise WidgetSessionInvalid()
     return Conversation.objects.get(id=conv_id, visitor=session.visitor, type=Conversation.Type.CUSTOMER)
@@ -491,7 +491,7 @@ class WidgetMessageListView(APIView):
     permission_classes = []
     def get(self, request, conv_id):
         try:
-            conv = _get_visitor_conversation(extract_session_token(request), conv_id)
+            conv = _get_visitor_conversation(request, conv_id)
         except WidgetSessionInvalid:
             return _session_invalid_response()
         except (Conversation.DoesNotExist, DjangoValidationError, ValueError):
@@ -508,7 +508,7 @@ class WidgetBrandingView(APIView):
     permission_classes = []
     def get(self, request, conv_id):
         try:
-            conv = _get_visitor_conversation(extract_session_token(request), conv_id)
+            conv = _get_visitor_conversation(request, conv_id)
         except WidgetSessionInvalid:
             return _session_invalid_response()
         except (Conversation.DoesNotExist, DjangoValidationError, ValueError):
@@ -519,7 +519,7 @@ class WidgetMarkReadView(APIView):
     permission_classes = []
     def post(self, request, conv_id):
         try:
-            conv = _get_visitor_conversation(extract_session_token(request), conv_id)
+            conv = _get_visitor_conversation(request, conv_id)
         except WidgetSessionInvalid:
             return _session_invalid_response()
         except (Conversation.DoesNotExist, DjangoValidationError, ValueError):
@@ -536,7 +536,7 @@ class WidgetUploadView(APIView):
     throttle_scope = 'media_upload'
     def post(self, request, conv_id):
         try:
-            conv = _get_visitor_conversation(extract_session_token(request), conv_id)
+            conv = _get_visitor_conversation(request, conv_id)
         except WidgetSessionInvalid:
             return _session_invalid_response()
         except (Conversation.DoesNotExist, DjangoValidationError, ValueError):
@@ -578,7 +578,7 @@ class WidgetRateConversationView(APIView):
     throttle_scope = 'widget_rating'
     def post(self, request, conv_id):
         try:
-            conv = _get_visitor_conversation(extract_session_token(request), conv_id)
+            conv = _get_visitor_conversation(request, conv_id)
         except WidgetSessionInvalid:
             return _session_invalid_response()
         except (Conversation.DoesNotExist, DjangoValidationError, ValueError):

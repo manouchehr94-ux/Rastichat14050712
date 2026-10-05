@@ -409,6 +409,11 @@ if IS_PRODUCTION_LIKE and LEGACY_URL_CREDENTIALS_ENABLED:
     else:
         LEGACY_URL_CREDENTIALS_UNTIL = _until
 
+# Per-project domain restriction (projects/domains.py). When true, a project with NO allowed_domains is refused
+# instead of being unrestricted. Roll out by filling every project's domains first
+# (`manage.py report_projects_domain_status` lists the ones still empty), then turn this on.
+WIDGET_REQUIRE_ALLOWED_DOMAINS = _env_bool('WIDGET_REQUIRE_ALLOWED_DOMAINS', default=False)
+
 # WebSocket ticket lifetime and how long an accepted-but-unauthenticated socket may wait for its auth frame.
 WS_TICKET_TTL_SECONDS = int(os.environ.get('WS_TICKET_TTL_SECONDS', 30))
 WS_AUTH_TIMEOUT_SECONDS = float(os.environ.get('WS_AUTH_TIMEOUT_SECONDS', 10))

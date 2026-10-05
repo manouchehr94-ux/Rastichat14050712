@@ -14,7 +14,7 @@ from common.tenancy import resolve_operator_workspace
 from conversations.models import Conversation
 from projects.models import Project
 from visitors.models import Visitor, VisitorSession
-from visitors.sessions import get_valid_session, extract_session_token
+from visitors.sessions import get_valid_session, get_request_session, extract_session_token
 
 from . import services
 from .attachments import UploadValidationError, validate_and_normalize_kb_upload
@@ -332,7 +332,7 @@ class PublicKnowledgeBaseFeedbackView(APIView):
 
     def post(self, request, slug):
         article = _get_public_article_or_404(request, slug)
-        session = get_valid_session(extract_session_token(request))
+        session = get_request_session(request)
         if session is None:
             return Response({'error': 'Invalid session', 'code': 'session_invalid'}, status=status.HTTP_401_UNAUTHORIZED)
         is_helpful = request.data.get('is_helpful')

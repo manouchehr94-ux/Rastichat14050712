@@ -13,7 +13,7 @@ from rest_framework.throttling import ScopedRateThrottle
 from rest_framework.views import APIView
 
 from common import ws_tickets
-from visitors.sessions import extract_session_token, get_valid_session
+from visitors.sessions import get_request_session
 
 from . import ws_access
 
@@ -57,7 +57,7 @@ class WidgetWsTicketView(APIView):
     throttle_scope = 'ws_ticket'
 
     def post(self, request):
-        session = get_valid_session(extract_session_token(request))
+        session = get_request_session(request)
         if session is None:
             return Response({'error': 'Invalid session', 'code': 'session_invalid'}, status=status.HTTP_401_UNAUTHORIZED)
         conv = ws_access.visitor_conversation(session, request.data.get('conversation_id'))
