@@ -36,6 +36,7 @@ for path in \
   "/ws/dashboard/support/$SECRET_JWT/$CONV/" \
   "/ws/notifications/$SECRET_JWT/" \
   "/api/v1/widget/conversations/$CONV/messages/?session_token=$SECRET_WIDGET&x=1" \
+  "/media/attachments/2026/10/05/SECRETFILE0123456789abcdef.jpg" "/media/kb_attachments/2026/10/05/SECRETKBFILE.pdf" \
   "/ws/v2/widget/$CONV/" "/ws/v2/dashboard/$CONV/" "/ws/v2/support/$CONV/" "/ws/v2/notifications/" \
   "/api/v1/health/ready/"; do
   curl -sS -o /dev/null "$U$path"
@@ -46,7 +47,7 @@ fail=0
 if grep -E 'SECRET' "$LOG" >/dev/null; then echo "FAIL: a credential reached the access log:"; grep SECRET "$LOG"; fail=1; fi
 if grep -F 'session_token' "$LOG" >/dev/null; then echo "FAIL: query string was logged"; fail=1; fi
 for want in '/ws/widget/[redacted]/'"$CONV"'/' '/ws/dashboard/[redacted]/'"$CONV"'/' '/ws/dashboard/support/[redacted]/'"$CONV"'/' \
-            '/ws/notifications/[redacted]/' "/ws/v2/widget/$CONV/" "/ws/v2/dashboard/$CONV/" "/ws/v2/support/$CONV/" '/ws/v2/notifications/' \
+            '/ws/notifications/[redacted]/' '/media/attachments/[redacted]' '/media/kb_attachments/[redacted]' "/ws/v2/widget/$CONV/" "/ws/v2/dashboard/$CONV/" "/ws/v2/support/$CONV/" '/ws/v2/notifications/' \
             '/api/v1/widget/conversations/'"$CONV"'/messages/ ' '/api/v1/health/ready/'; do
   grep -F -- "$want" "$LOG" >/dev/null || { echo "FAIL: expected log to contain: $want"; fail=1; }
 done
