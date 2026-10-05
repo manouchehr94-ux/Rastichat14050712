@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Isolated Django 5.2 staging stack on a DISPOSABLE Linux host (a throw-away VM/sandbox, never the live VPS).
-# Process-based (no Docker): own PostgreSQL cluster, own Redis, N Daphne workers, an L7 balancer, a widget static
+# Process-based (no Docker): own PostgreSQL cluster, own Redis, N Daphne workers, an L4 balancer, a widget static
 # server, two Next.js dashboards and the REAL deploy/nginx templates (rendered by scripts/nginx/install-sites.sh)
 # with TLS from a throw-away CA. All data synthetic. Refuses to run unless isolation is confirmed.
 #
@@ -60,6 +60,7 @@ MEDIA_ROOT=$WWW_DIR/media
 STATIC_ROOT=$WWW_DIR/static
 MEDIA_HOST_PATH=$WWW_DIR/media
 STATIC_HOST_PATH=$WWW_DIR/static
+CHAT_ATTACHMENTS_PUBLIC=${CHAT_ATTACHMENTS_PUBLIC:-0}
 NEXT_PUBLIC_API_BASE_URL=https://$BACKEND_DOMAIN/api/v1
 NEXT_PUBLIC_WS_BASE_URL=wss://$BACKEND_DOMAIN/ws
 WS_REVALIDATE_SECONDS=5
@@ -160,18 +161,12 @@ NE
   # sandbox deviation only: this host has no IPv6, so drop the `listen [::]` lines from the RENDERED copies (the repo templates are untouched)
   if ! ip -6 addr show 2>/dev/null | grep -q inet6; then sed -i '/listen \[::\]/d' /etc/nginx/sites-available/rastichat-*.conf; fi
   nginx -t
-  # aux nginx: L7 balancer 8100 -> daphne workers, widget static 8180 (the roles of docker/nginx + widget container)
-  local ups=""; for i in $(seq 1 "$WORKERS"); do ups="$ups server 127.0.0.1:$((8100+i)); "; done
+  # aux nginx: widget static 8180 (L4 balancer 8100 -> daphne workers is tcp-balancer.mjs, see start()) (the roles of docker/nginx + widget container)
   cat > "$STG_DIR/aux-nginx.conf" <<AUX
 pid $STG_DIR/run/aux-nginx.pid; error_log $STG_DIR/logs/aux-nginx-error.log; events {}
 http {
   include /etc/nginx/mime.types; access_log off; map \$http_upgrade \$cu { default upgrade; '' close; }
   client_body_temp_path $STG_DIR/run/b; proxy_temp_path $STG_DIR/run/p; fastcgi_temp_path $STG_DIR/run/f; uwsgi_temp_path $STG_DIR/run/u; scgi_temp_path $STG_DIR/run/s;
-  upstream daphne { $ups }
-  server { listen 127.0.0.1:8100; client_max_body_size 20m;
-    location / { proxy_pass http://daphne; proxy_http_version 1.1; proxy_set_header Upgrade \$http_upgrade; proxy_set_header Connection \$cu;
-      proxy_set_header Host \$host; proxy_set_header X-Forwarded-Proto \$http_x_forwarded_proto; proxy_set_header X-Forwarded-For \$http_x_forwarded_for;
-      proxy_set_header X-Real-IP \$http_x_real_ip; proxy_read_timeout 3600s; } }
   server { listen 127.0.0.1:8180; root $WWW_DIR/widget;
     location = /widget.js { add_header Cache-Control "no-cache, must-revalidate"; }
     location ~ ^/widget/[^/]+/widget\.js\$ { add_header Cache-Control "public, max-age=31536000, immutable"; } }
@@ -214,6 +209,12 @@ HTML
 start() {
   load_env; cd "$SRC/backend"
   pgrep -f "nginx: master process nginx -c $STG_DIR/aux-nginx.conf" >/dev/null || nginx -c "$STG_DIR/aux-nginx.conf" -p "$STG_DIR/run/"
+  # L4 (not L7) balancer: the front nginx must see Daphne's raw response headers, X-Accel-Redirect included
+  if ! { [ -f "$STG_DIR/run/balancer.pid" ] && kill -0 "$(cat "$STG_DIR/run/balancer.pid")" 2>/dev/null; }; then
+    local bports=""; for i in $(seq 1 "$WORKERS"); do bports="$bports $((8100+i))"; done
+    setsid nohup node "$(dirname "$0")/tcp-balancer.mjs" 8100 $bports >> "$STG_DIR/logs/balancer.log" 2>&1 &
+    echo $! > "$STG_DIR/run/balancer.pid"
+  fi
   for i in $(seq 1 "$WORKERS"); do
     port=$((8100+i)); pidf="$STG_DIR/run/daphne$i.pid"
     if [ -f "$pidf" ] && kill -0 "$(cat "$pidf")" 2>/dev/null; then continue; fi
@@ -236,6 +237,7 @@ stop() {
   stop_dashboards
   stop_workers
   for f in "$STG_DIR"/run/daphne*.pid "$STG_DIR"/run/dash-*.pid; do [ -f "$f" ] && kill "$(cat "$f")" 2>/dev/null || true; rm -f "$f"; done
+  [ -f "$STG_DIR/run/balancer.pid" ] && kill "$(cat "$STG_DIR/run/balancer.pid")" 2>/dev/null || true; rm -f "$STG_DIR/run/balancer.pid"
   [ -f "$STG_DIR/run/aux-nginx.pid" ] && kill "$(cat "$STG_DIR/run/aux-nginx.pid")" 2>/dev/null || true
   pgrep -x nginx >/dev/null && nginx -s quit || true
 }
