@@ -192,6 +192,16 @@ jobs:
         # `|| true`.
         run: npm audit --audit-level=high || true
 
+  nginx-config:
+    # Proves the access-log redaction (no URL credentials / query strings in the proxy log) with a real nginx.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install nginx
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq nginx-light
+      - name: Log redaction test (throw-away nginx on a high local port)
+        run: scripts/nginx/test-log-redaction.sh
+
   secret-scan:
     runs-on: ubuntu-latest
     steps:
