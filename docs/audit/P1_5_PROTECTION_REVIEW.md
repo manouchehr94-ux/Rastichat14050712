@@ -42,13 +42,31 @@ customer chats — a customer's image (an ID card, a receipt, an address label) 
 the session revoked, the staff member removed, or the store deactivated. Revocation (P1-1/P1-2) therefore stops *new* link
 discovery but cannot kill a link already leaked.
 
-**Decision: yes, private customer attachments should move to authenticated / signed access — priority P2 (do it before storing
-sensitive customer content at scale or before handling regulated data, not before enabling chat for a pilot store).**
-Reasons for P2 rather than P1: no enumeration path, links are only ever delivered to parties already authorised for that
-conversation, nothing is listable, and the leak vectors need a prior leak of a log/link; against that, the fix needs an nginx
-change (internal location) that cannot be validated without a staging server, which this task may not touch.
+**What is wrong with "unguessable file name = access control" (re-assessed; this replaces the earlier "P2" conclusion).**
+An unguessable name defeats *enumeration*, nothing else. It is a bearer secret that, once seen, works forever and for anyone, and
+this system *writes the secret down itself*: every `GET /media/attachments/<uuid>.jpg` is recorded with its full path in the nginx
+access log, in browser history, in any reverse proxy / CDN / uptime tool in front of it, and in whatever the dashboards or the
+customer's browser sync. Anyone who ever sees a log line — an ops engineer, a log shipper, a backup of `/var/log/nginx` — holds a
+permanent key to that customer's file, with no relation to who they are, which store they work for, whether the conversation is
+closed, the customer's session revoked, the staff member removed, or the workspace deactivated. P1-1/P1-2 revocation closes
+*sockets and APIs*; it cannot close a link that is already out. For private customer content (IDs, receipts, addresses, voice
+notes, payment screenshots) that is a real, non-theoretical exposure, and it also breaks the tenant-isolation promise made for
+chats and the store↔platform support channel.
 
-**Recommended design (not implemented here — needs nginx and a staging test):**
+**Decision (revised): yes — chat attachments must be served only after an authorization check or through short-lived signed URLs.
+Priority: P1, a hard gate before the operational RastiSi connection** (not a pilot-with-internal-staff blocker, because the
+interim mitigations below remove the largest leak path, but it must land before real store customers' content flows). It is
+proposed as an **independent security PR (P1-6)**; it is not part of this PR because it changes all three clients and needs the
+staging nginx to be validated.
+
+**Interim mitigation (done in the P1-3 branch, already stacked below this PR; needs only an nginx reload):**
+* the nginx access log (`rastichat_redacted` format) no longer records `/media/(kb_)attachments/…` file names — the log can no
+  longer be turned into a list of working links (proven by `scripts/nginx/test-log-redaction.sh`);
+* `/media/` responses carry `Referrer-Policy: no-referrer` and `X-Content-Type-Options: nosniff`.
+Logs written *before* this change still contain file names: rotate/delete them per the retention policy, and treat sensitive
+attachments referenced there as exposed.
+
+**Proposed P1-6 design (independent PR; needs the staging nginx to validate):**
 1. `attachment_url` becomes `/api/v1/attachments/<message_id>/?sig=<signed token>` where the token is a `django.core.signing`
    payload `{message, audience}` with `max_age` ≈ 10 min, minted per response for the *requesting* identity (operator JWT / visitor
    session / ticket) — `<img>` and `<audio>` cannot send headers, so a signed query token is the only practical carrier; unlike a
@@ -58,6 +76,9 @@ change (internal location) that cannot be validated without a staging server, wh
    no-store`, `Content-Disposition: inline`, `X-Content-Type-Options: nosniff`.
 3. Remove the public `location /media/` from nginx **after** clients have refreshed (old links in already-rendered history stop
    working; the history endpoints re-issue fresh signed URLs on every fetch).
+   *Audience binding:* the same message is broadcast to the visitor and to staff in one channel-layer group, so the token cannot
+   be bound to one recipient there; it is bound to `{message, conversation}` with a short `max_age`, and **history/list responses
+   re-sign on every fetch** so a late render just refetches. Clients get one retry-on-error (`onerror` → refetch the message URL).
 4. Migration for existing messages: none needed in the database (the URL is computed from `attachment` on read). KB public
    attachments can stay public; only `INTERNAL`-visibility and chat attachments move.
 5. Test plan: unauthorized/expired/tampered/other-conversation tokens → 403/404; revoked session → 403; nginx direct `/media/` → 404
@@ -69,6 +90,6 @@ absolute `/media/` URLs break once the public location is removed (hence step 3 
 | item | priority |
 |---|---|
 | `widget_init` throttle, staff REST/WS write limits | done in this PR (P1) |
-| authenticated/signed attachments | **P2**, designed above, blocked on a staging nginx |
+| authenticated/signed attachments | **P1 gate before the operational RastiSi connection** — separate PR P1-6, designed above; interim log/header mitigation already in the P1-3 branch |
 | per-user throttle for remaining staff write endpoints; `typing`/`mark_read` limits | P2 |
 | shared Redis cache for exact multi-replica DRF counters | P2 (operational) |
