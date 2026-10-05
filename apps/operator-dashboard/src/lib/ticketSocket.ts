@@ -12,8 +12,8 @@
  * Reconnection (found missing on the isolated staging stack: a backend restart, a deploy or a proxy idle timeout left
  * every open dashboard silently stale): when the connection drops for any reason other than the caller closing it, or the
  * server saying access is gone, the socket reconnects with exponential backoff and a FRESH ticket each time (tickets are
- * single use). `onReconnect` fires once the new connection is authenticated, so the caller can resynchronise whatever it
- * missed while disconnected.
+ * single use). `onReconnect` fires once a connection is authenticated after a drop OR after failed attempts (e.g. the backend was
+ * restarting while the page first connected), so the caller can resynchronise whatever it missed in the meantime.
  */
 export type LiveSocket = Pick<WebSocket, 'send' | 'close' | 'readyState'>;
 
@@ -46,7 +46,8 @@ export class TicketSocket implements LiveSocket {
     private ws: WebSocket | null = null;
     private authenticated = false;
     private closedByCaller = false;
-    private everAuthenticated = false;
+    /** Something may have been missed: a drop, or a failed attempt before the first successful connection. */
+    private needsResync = false;
     private attempt = 0;
     private authFailures = 0;
     private timer: ReturnType<typeof setTimeout> | null = null;
@@ -72,6 +73,7 @@ export class TicketSocket implements LiveSocket {
 
     private scheduleReconnect(): void {
         if (this.closedByCaller || this.opts.reconnect === false || this.timer) return;
+        this.needsResync = true;
         const delay = Math.min(MAX_DELAY_MS, BASE_DELAY_MS * 2 ** this.attempt) * (0.5 + Math.random() * 0.5);
         this.attempt += 1;
         this.timer = setTimeout(() => { this.timer = null; void this.open(); }, delay);
@@ -110,10 +112,10 @@ export class TicketSocket implements LiveSocket {
                     this.authenticated = true;
                     this.attempt = 0;
                     this.authFailures = 0;
-                    const reopened = this.everAuthenticated;
-                    this.everAuthenticated = true;
+                    const resync = this.needsResync;
+                    this.needsResync = false;
                     onOpen?.();
-                    if (reopened) onReconnect?.();
+                    if (resync) onReconnect?.();
                 }
                 return;
             }

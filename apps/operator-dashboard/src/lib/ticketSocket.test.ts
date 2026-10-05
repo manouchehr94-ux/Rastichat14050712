@@ -109,6 +109,29 @@ describe('TicketSocket', () => {
       expect(onOpen).toHaveBeenCalledTimes(2);
     });
 
+    it('also resyncs when the FIRST connection only succeeded after failed attempts (backend restarting during page load)', async () => {
+      let up = false;
+      fetchMock.mockImplementation(() => up
+        ? Promise.resolve({ ok: true, status: 201, json: () => Promise.resolve({ ticket: 'T' }) })
+        : Promise.reject(new Error('backend restarting')));
+      const onReconnect = vi.fn();
+      new TicketSocket(opts({ onReconnect }));
+      await vi.advanceTimersByTimeAsync(0);
+      up = true;
+      await vi.advanceTimersByTimeAsync(1100);
+      expect(sockets).toHaveLength(1);
+      authenticate(0);
+      expect(onReconnect).toHaveBeenCalledOnce(); // history was fetched before the socket was live: replay what arrived since
+    });
+
+    it('does not resync on a clean first connection', async () => {
+      const onReconnect = vi.fn();
+      new TicketSocket(opts({ onReconnect }));
+      await vi.advanceTimersByTimeAsync(0);
+      authenticate(0);
+      expect(onReconnect).not.toHaveBeenCalled();
+    });
+
     it('backs off exponentially while the backend is down and recovers when it is back', async () => {
       fetchMock.mockImplementation(() => Promise.reject(new Error('network down')));
       const onClose = vi.fn();
