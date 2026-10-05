@@ -285,3 +285,50 @@ class UnauthenticatedGroupAccessTests(_WsBase):
         token = AccessToken.for_user(self.operator)
         token.set_exp(lifetime=timedelta(seconds=-5))
         await connect(f'/ws/dashboard/{token}/{self.conv.id}/', expect=False)
+
+
+@override_settings(WS_REVALIDATE_SECONDS=300, WS_REVALIDATE_INTERVAL_SECONDS=0.2)
+class IdleSocketRevocationTests(_WsBase):
+    """Found on the isolated staging stack: with event-driven checks only, a deactivated user's IDLE socket stayed connected."""
+
+    async def test_idle_dashboard_socket_is_closed_without_any_traffic(self):
+        comm = await connect(f'/ws/dashboard/{token_for(self.operator)}/{self.conv.id}/')
+        await db(User.objects.filter(id=self.operator.id).update, is_active=False)
+        out = await comm.receive_output(timeout=3)  # no frame sent, no event published
+        self.assertEqual((out['type'], out.get('code')), ('websocket.close', REVOKED))
+
+    async def test_idle_widget_socket_closes_when_the_session_is_revoked(self):
+        from django.utils import timezone
+        from visitors.models import VisitorSession
+        comm = await connect(f'/ws/widget/{self.session.token}/{self.conv.id}/')
+        await db(VisitorSession.objects.filter(pk=self.session.pk).update, revoked_at=timezone.now())
+        out = await comm.receive_output(timeout=3)
+        self.assertEqual((out['type'], out.get('code')), ('websocket.close', REVOKED))
+
+    async def test_idle_notifications_socket_closes_for_a_deactivated_user(self):
+        comm = await connect(f'/ws/notifications/{token_for(self.operator)}/')
+        await db(User.objects.filter(id=self.operator.id).update, is_active=False)
+        out = await comm.receive_output(timeout=3)
+        self.assertEqual((out['type'], out.get('code')), ('websocket.close', REVOKED))
+
+    async def test_a_user_who_is_still_authorized_is_never_closed_by_the_timer(self):
+        comm = await connect(f'/ws/dashboard/{token_for(self.operator)}/{self.conv.id}/')
+        self.assertTrue(await comm.receive_nothing(timeout=1.0))  # five timer rounds
+        await comm.send_json_to({'message': 'still here', 'client_message_id': 'idle1'})
+        self.assertEqual((await comm.receive_json_from(timeout=3))['content'], 'still here')
+        await comm.disconnect()
+
+    @override_settings(WS_REVALIDATE_INTERVAL_SECONDS=0)
+    async def test_interval_zero_disables_the_timer(self):
+        comm = await connect(f'/ws/dashboard/{token_for(self.operator)}/{self.conv.id}/')
+        await db(User.objects.filter(id=self.operator.id).update, is_active=False)
+        self.assertTrue(await comm.receive_nothing(timeout=0.8))
+        await comm.disconnect()
+
+    async def test_the_timer_task_does_not_outlive_the_socket(self):
+        import asyncio
+        comm = await connect(f'/ws/dashboard/{token_for(self.operator)}/{self.conv.id}/')
+        await comm.disconnect()
+        await asyncio.sleep(0.5)
+        pending = [t for t in asyncio.all_tasks() if '_periodic_check' in repr(t) and not t.done()]
+        self.assertEqual(pending, [])

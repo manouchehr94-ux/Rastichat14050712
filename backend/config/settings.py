@@ -423,6 +423,9 @@ WS_AUTH_TIMEOUT_SECONDS = float(os.environ.get('WS_AUTH_TIMEOUT_SECONDS', 10))
 # the maximum time a user who was deactivated / removed / demoted can still
 # receive events on an already-open socket. 0 = check on every event.
 WS_REVALIDATE_SECONDS = int(os.environ.get('WS_REVALIDATE_SECONDS', 5))
+# Idle sockets (no frame, no event) are also re-checked on a timer: a deactivated user's quiet socket must not stay connected.
+# Cost: one authorization query per open socket per interval, so keep it well above WS_REVALIDATE_SECONDS. 0 disables the timer.
+WS_REVALIDATE_INTERVAL_SECONDS = int(os.environ.get('WS_REVALIDATE_INTERVAL_SECONDS', 30))
 # Visitor (customer) session lifecycle — see visitors/sessions.py. A session is valid
 # until `expires_at` (sliding: renewed on use up to the absolute max age), until it is
 # revoked (logout) or its token is rotated. Expiry never deletes the Visitor or their

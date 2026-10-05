@@ -127,6 +127,13 @@ unless an embedding site cannot migrate yet and you accept that risk explicitly.
   `visitors.W001` and fails, and every use logs `widget init used legacy unverified external_id lookup`.
 - Tests: `config/tests_settings_guardrails.py` (`test_unverified_external_id_*`).
 
+## `WS_REVALIDATE_INTERVAL_SECONDS`
+
+Default `30`; `0` disables. Event-driven revalidation (`WS_REVALIDATE_SECONDS`, below) only runs when a frame or event passes
+through a socket, so a deactivated user's *idle* socket would otherwise stay connected indefinitely (found on the isolated
+staging stack). Every open socket therefore also re-checks its authorization on this timer (±20 % jitter) and closes with `4403`.
+Cost: one authorization query per open socket per interval — keep it well above `WS_REVALIDATE_SECONDS`.
+
 ## `WS_REVALIDATE_SECONDS`
 
 Default `5`. WebSocket consumers (`common/ws_auth.py`) re-check authorization (user active, exact workspace/platform
