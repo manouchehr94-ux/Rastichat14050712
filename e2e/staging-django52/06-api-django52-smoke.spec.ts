@@ -1,5 +1,6 @@
 import { test, expect } from '@playwright/test';
 import { BACKEND_URL, OPERATOR_EMAIL, OPERATOR_PASSWORD } from './env';
+import { loginViaForm } from './helpers';
 
 // Pure HTTP checks of behaviours that changed with Django 5.2 / DRF 3.17 / the P0-P1 hardening.
 test.describe('API smoke on the Django 5.2 stack', () => {
@@ -10,7 +11,8 @@ test.describe('API smoke on the Django 5.2 stack', () => {
     expect((await request.get(`${BACKEND_URL}/api/v1/health/monitoring/`)).status()).toBe(401);
   });
 
-  test('JWT login works, bad password is 401, and the response carries the security headers', async ({ request }) => {
+  test('JWT login works, bad password is 401, and the response carries the security headers', async ({ request }, testInfo) => {
+    test.skip(testInfo.project.name !== 'desktop-chromium', 'API behaviour is project-independent; nginx rate-limits /auth/login/ (10/min per IP) exactly as in production');
     const bad = await request.post(`${BACKEND_URL}/api/v1/auth/login/`, { data: { email: OPERATOR_EMAIL, password: 'definitely-wrong' } });
     expect(bad.status()).toBe(401);
     const ok = await request.post(`${BACKEND_URL}/api/v1/auth/login/`, { data: { email: OPERATOR_EMAIL, password: OPERATOR_PASSWORD } });
@@ -54,5 +56,14 @@ test.describe('API smoke on the Django 5.2 stack', () => {
       headers: { Authorization: `Bearer ${login.access}` }, data: { kind: 'dashboard_chat', conversation_id: '00000000-0000-0000-0000-000000000000' },
     });
     expect(r.status()).toBe(404);
+  });
+
+  test('the operator dashboard login form really signs in and opens the realtime notifications socket (no credential in its URL)', async ({ page }) => {
+    const urls: string[] = [];
+    page.on('websocket', (ws) => urls.push(ws.url()));
+    await page.waitForTimeout(7000); // nginx allows 10 logins/min per IP (production values): stay inside the limit
+    await loginViaForm(page);
+    await expect.poll(() => urls.length, { timeout: 20000 }).toBeGreaterThan(0);
+    expect(urls.every((u) => u.includes('/ws/v2/') && !/eyJ/.test(u))).toBe(true);
   });
 });

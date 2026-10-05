@@ -17,10 +17,10 @@ export default defineConfig({
     trace: 'retain-on-failure',
     screenshot: 'only-on-failure',
     video: 'retain-on-failure',
-    ignoreHTTPSErrors: false,
+    ignoreHTTPSErrors: process.env.DJANGO52_IGNORE_HTTPS_ERRORS === '1',
     launchOptions: {
       executablePath: process.env.PW_CHROMIUM_PATH || undefined,
-      args: ['--use-fake-device-for-media-stream', '--use-fake-ui-for-media-stream'],
+      args: ['--use-fake-device-for-media-stream', '--use-fake-ui-for-media-stream', '--no-proxy-server', '--disable-background-networking', '--host-resolver-rules=' + (process.env.DJANGO52_HOST_RULES || 'MAP embed-allowed.example.test 127.0.0.1, MAP embed-forbidden.example.test 127.0.0.1')],
     },
   },
   projects: [

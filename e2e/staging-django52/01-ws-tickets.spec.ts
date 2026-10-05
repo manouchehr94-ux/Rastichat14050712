@@ -1,6 +1,6 @@
 import { test, expect } from '@playwright/test';
 import { ALLOWED_EMBED_ORIGIN, BACKEND_URL, FORBIDDEN_EMBED_ORIGIN } from './env';
-import { authFrames, captureSockets, loginOperator, openWidgetAt, sendWidgetText, serveEmbedAt, uniqueText, urlLeaksCredential } from './helpers';
+import { authFrames, captureSockets, loginOperator, openConversationWithText, openWidgetAt, operatorReply, sendWidgetText, serveEmbedAt, uniqueText, urlLeaksCredential } from './helpers';
 
 const ORIGIN = ALLOWED_EMBED_ORIGIN || FORBIDDEN_EMBED_ORIGIN; // when no domains are configured any origin works
 
@@ -21,10 +21,9 @@ test.describe('P1-3 ticket-authenticated WebSockets (Django 5.2 stack)', () => {
     await openWidgetAt(customer, ORIGIN);
     await sendWidgetText(customer, marker);
     await loginOperator(operator);
-    await expect(operator.getByText(marker).last()).toBeVisible({ timeout: 20000 });
+    await openConversationWithText(operator, marker);
     const reply = uniqueText('DJ52-پاسخ');
-    await operator.locator('input[placeholder="پاسخ به مشتری…"]').fill(reply);
-    await operator.locator('button:has-text("➤")').click();
+    await operatorReply(operator, reply);
     await expect(customer.locator('.rasti-msg.operator .rasti-bubble', { hasText: reply })).toBeVisible({ timeout: 20000 });
 
     for (const log of [...customerSockets, ...operatorSockets]) {

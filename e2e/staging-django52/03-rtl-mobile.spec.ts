@@ -34,7 +34,7 @@ test.describe('Persian / RTL and responsive layout', () => {
       const overflow = await page.evaluate(() => document.scrollingElement!.scrollWidth - window.innerWidth);
       expect(overflow).toBeLessThanOrEqual(1);
       const vp = page.viewportSize()!;
-      for (const sel of ['input[type="email"]', 'input[type="password"]', 'button']) {
+      for (const sel of ['input[type="email"], input[type="text"]', 'input[type="password"]', 'button']) {
         const box = (await page.locator(sel).first().boundingBox())!;
         expect(box.x).toBeGreaterThanOrEqual(-1);
         expect(box.x + box.width).toBeLessThanOrEqual(vp.width + 1);

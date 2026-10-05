@@ -1,6 +1,6 @@
 import { test, expect } from '@playwright/test';
 import { ALLOWED_EMBED_ORIGIN, FORBIDDEN_EMBED_ORIGIN } from './env';
-import { authFrames, captureSockets, loginOperator, openWidgetAt, sendWidgetText, serveEmbedAt, uniqueText } from './helpers';
+import { authFrames, captureSockets, loginOperator, openConversationWithText, openWidgetAt, operatorReply, restartBackendWorkers, sendWidgetText, serveEmbedAt, uniqueText } from './helpers';
 
 const ORIGIN = ALLOWED_EMBED_ORIGIN || FORBIDDEN_EMBED_ORIGIN;
 
@@ -20,24 +20,22 @@ test.describe('WebSocket reconnect behaviour (Django 5.2 / Channels stack)', () 
     const before = uniqueText('DJ52-before-outage');
     await sendWidgetText(customer, before);
     await loginOperator(operator);
-    await expect(operator.getByText(before).last()).toBeVisible({ timeout: 20000 });
+    await openConversationWithText(operator, before);
 
-    // network loss: the browser drops the socket; the widget must say so ...
-    await customerCtx.setOffline(true);
-    await expect(customer.locator('#rasti-offline-banner.show')).toBeVisible({ timeout: 20000 });
-    // ... and recover on its own once the network is back
-    await customerCtx.setOffline(false);
-    await expect(customer.locator('#rasti-offline-banner.show')).toBeHidden({ timeout: 30000 });
+    // outage: every ASGI worker restarts, so every open socket is dropped by the server; the widget must say so ...
+    test.skip(!restartBackendWorkers(), 'DJANGO52_RESTART_BACKEND_CMD is not set');
+    await expect(customer.locator('#rasti-offline-banner.show')).toBeVisible({ timeout: 30000 });
+    // ... and recover on its own once the backend is back
+    await expect(customer.locator('#rasti-offline-banner.show')).toBeHidden({ timeout: 60000 });
     await expect.poll(() => sockets.filter((s) => s.received.some((f) => f.includes('auth.ok'))).length, { timeout: 30000 }).toBeGreaterThanOrEqual(2);
     const secondTicket = authFrames(sockets[sockets.length - 1])[0].ticket;
     expect(secondTicket).not.toBe(firstTicket); // single-use tickets: every reconnect mints a new one
 
     const after = uniqueText('DJ52-after-outage');
     await sendWidgetText(customer, after);
-    await expect(operator.getByText(after).last()).toBeVisible({ timeout: 20000 });
+    await expect(operator.getByText(after).last()).toBeVisible({ timeout: 30000 });
     const reply = uniqueText('DJ52-reply-after-outage');
-    await operator.locator('input[placeholder="پاسخ به مشتری…"]').fill(reply);
-    await operator.locator('button:has-text("➤")').click();
+    await operatorReply(operator, reply);
     await expect(customer.locator('.rasti-msg.operator .rasti-bubble', { hasText: reply })).toBeVisible({ timeout: 20000 });
     await customerCtx.close();
     await operatorCtx.close();
@@ -55,10 +53,9 @@ test.describe('WebSocket reconnect behaviour (Django 5.2 / Channels stack)', () 
     await sendWidgetText(tabA, marker);
     await openWidgetAt(tabB, ORIGIN); // same localStorage => same session and conversation
     await loginOperator(operator);
-    await expect(operator.getByText(marker).last()).toBeVisible({ timeout: 20000 });
+    await openConversationWithText(operator, marker);
     const reply = uniqueText('DJ52-multi-reply');
-    await operator.locator('input[placeholder="پاسخ به مشتری…"]').fill(reply);
-    await operator.locator('button:has-text("➤")').click();
+    await operatorReply(operator, reply);
     await expect(tabA.locator('.rasti-msg.operator .rasti-bubble', { hasText: reply })).toBeVisible({ timeout: 20000 });
     await expect(tabB.locator('.rasti-msg.operator .rasti-bubble', { hasText: reply })).toBeVisible({ timeout: 20000 });
     await ctx.close();
