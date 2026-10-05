@@ -8,9 +8,8 @@
 location /protected-media/ {
     internal;
     alias __MEDIA_HOST_PATH__/;
-    # headers sent by the upstream survive an internal redirect only for Content-Type / Cache-Control / Content-Disposition, so the
-    # rest is repeated here
-    add_header Cache-Control "private, no-store" always;
+    # headers sent by the upstream survive an internal redirect only for Content-Type / Cache-Control / Content-Disposition (Django sets
+    # `Cache-Control: private, no-store`; adding it here would duplicate it), so the rest is repeated here
     add_header Referrer-Policy "no-referrer" always;
     add_header X-Content-Type-Options "nosniff" always;
 }
