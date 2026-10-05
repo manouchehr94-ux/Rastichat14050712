@@ -8,9 +8,11 @@ import { TicketSocket } from './ticketSocket';
  * WebSocket API every caller uses (send / close / readyState), so it is typed as WebSocket here and the
  * call sites stay unchanged.
  */
-const openTicketSocket = (path: string, ticketRequest: Record<string, unknown>, onMessage: (data: unknown) => void): WebSocket =>
+const openTicketSocket = (
+    path: string, ticketRequest: Record<string, unknown>, onMessage: (data: unknown) => void, onReconnect?: () => void,
+): WebSocket =>
     new TicketSocket({
-        apiBase: API_BASE, wsBase: WS_BASE, getToken: () => localStorage.getItem('token'), path, ticketRequest, onMessage,
+        apiBase: API_BASE, wsBase: WS_BASE, getToken: () => localStorage.getItem('token'), path, ticketRequest, onMessage, onReconnect,
     }) as unknown as WebSocket;
 
 export interface SupportSocketMessage { id: string; content: string; sender_type: string; [key: string]: unknown }
@@ -250,8 +252,26 @@ export const markAllNotificationsRead = async () => {
     if (!res.ok) throw new Error('Failed to mark all notifications read');
 };
 
-export const connectNotificationsWebSocket = <T,>(onMessage: (data: T) => void): WebSocket =>
-    openTicketSocket('/v2/notifications/', { kind: 'notifications' }, (data) => onMessage(data as T));
+/**
+ * After a reconnect, notifications created while the socket was down are replayed through the same `onMessage` as if they
+ * had arrived live (only those newer than the last one this connection delivered, so nothing is shown twice).
+ */
+export const connectNotificationsWebSocket = <T,>(onMessage: (data: T) => void): WebSocket => {
+    let lastSeenAt = new Date().toISOString();
+    const deliver = (data: unknown) => {
+        const created = (data as { notification?: { created_at?: string } })?.notification?.created_at;
+        if (created && created > lastSeenAt) lastSeenAt = created;
+        onMessage(data as T);
+    };
+    return openTicketSocket('/v2/notifications/', { kind: 'notifications' }, deliver, async () => {
+        try {
+            const missed = (await fetchNotifications() as Array<{ created_at?: string }>)
+                .filter((n) => !!n.created_at && (n.created_at as string) > lastSeenAt)
+                .sort((a, b) => String(a.created_at).localeCompare(String(b.created_at)));
+            missed.forEach((notification) => deliver({ type: 'notification.created', notification }));
+        } catch { /* the next event or a manual refresh recovers */ }
+    });
+};
 
 export const uploadAttachment = async (convId: string, file: File, messageType: 'IMAGE' | 'VOICE', clientId: string, extra?: Record<string, string>) => {
     const form = new FormData();
@@ -362,8 +382,14 @@ export const sendMarkReadEvent = (ws: WebSocket | null) => {
     if (ws && ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ type: 'mark_read' }));
 };
 
+/** After a reconnect the conversation's messages are refetched and replayed through `onMessage`; the page de-duplicates by client_message_id. */
 export const connectWebSocket = <T,>(convId: string, onMessage: (data: T) => void): WebSocket =>
-    openTicketSocket(`/v2/dashboard/${convId}/`, { kind: 'dashboard_chat', conversation_id: convId }, (data) => onMessage(data as T));
+    openTicketSocket(`/v2/dashboard/${convId}/`, { kind: 'dashboard_chat', conversation_id: convId }, (data) => onMessage(data as T), async () => {
+        try {
+            const messages = await fetchMessages(convId) as unknown[];
+            messages.forEach((message) => onMessage(message as T));
+        } catch { /* the next event or reselecting the conversation recovers */ }
+    });
 
 export const fetchSupportConversations = async () => {
     const res = await fetch(`${API_BASE}/support/`, { headers: { 'Authorization': `Bearer ${getToken()}` } });
@@ -392,7 +418,12 @@ export const sendSupportMessage = async (convId: string, content: string, client
     return res.json();
 };
 export const connectSupportWebSocket = (convId: string, onMessage: (data: SupportSocketMessage) => void): WebSocket =>
-    openTicketSocket(`/v2/support/${convId}/`, { kind: 'support', conversation_id: convId }, (data) => onMessage(data as SupportSocketMessage));
+    openTicketSocket(`/v2/support/${convId}/`, { kind: 'support', conversation_id: convId }, (data) => onMessage(data as SupportSocketMessage), async () => {
+        try {
+            const messages = await fetchSupportMessages(convId) as SupportSocketMessage[];
+            messages.forEach((message) => onMessage(message));
+        } catch { /* the next event or reselecting the ticket recovers */ }
+    });
 
 // --- Automation rules ---
 

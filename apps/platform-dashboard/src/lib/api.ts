@@ -65,4 +65,11 @@ export const connectSupportWebSocket = (convId: string, onMessage: (data: Suppor
         apiBase: API_BASE, wsBase: WS_BASE, getToken, path: `/v2/support/${convId}/`,
         ticketRequest: { kind: 'support', conversation_id: convId },
         onMessage: (data) => onMessage(data as SupportSocketMessage),
+        // reconnected after a drop: replay the messages missed meanwhile (the page de-duplicates by id)
+        onReconnect: async () => {
+            try {
+                const messages = await fetchPlatformSupportMessages(convId) as SupportSocketMessage[];
+                messages.forEach((message) => onMessage(message));
+            } catch { /* the next event or reselecting the ticket recovers */ }
+        },
     }) as unknown as WebSocket;
