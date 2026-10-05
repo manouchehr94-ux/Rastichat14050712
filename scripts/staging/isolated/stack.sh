@@ -291,6 +291,7 @@ lines = [
  "export DJANGO52_RESTART_BACKEND_CMD=\"" + stack + " restart-backend\"",
  "export DJANGO52_SEED_JSON=$STG_DIR/seed-extra.json DJANGO52_ADMIN_CMD=\"" + stack + " admin\"",
  "export DJANGO52_WORKER_URLS=http://127.0.0.1:8101,http://127.0.0.1:8102",
+ "export DJANGO52_CHAT_MEDIA_CLOSED=\${DJANGO52_CHAT_MEDIA_CLOSED:-0}",
  "export STG_DIR=$STG_DIR REDISPORT=$REDISPORT PGPORT=$PGPORT REDIS_PASSWORD_PLAIN=$REDIS_PASSWORD_PLAIN DB_PASSWORD_PLAIN=$DB_PASSWORD_PLAIN",
 ]
 open(sys.argv[1], "w").write("\n".join(lines) + "\n"); os.chmod(sys.argv[1], 0o600)

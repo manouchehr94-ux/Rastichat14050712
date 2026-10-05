@@ -38,6 +38,9 @@ inactive = user('inactive-a', 'کاربر غیرفعال', is_staff=True, is_act
 WorkspaceMembership.objects.get_or_create(user=inactive, workspace=wsA, defaults={'role': 'WORKSPACE_OPERATOR'})
 victim = user('victim-a', 'اپراتور برای ابطال', is_staff=True)
 WorkspaceMembership.objects.get_or_create(user=victim, workspace=wsA, defaults={'role': 'WORKSPACE_OPERATOR'})
+for n in range(1, 6):  # a team for the soak: staff WebSocket writes are rate-limited per user, so load needs several identities
+    soak_op = user(f'soak-op-{n}', f'اپراتور بار {n}', is_staff=True)
+    WorkspaceMembership.objects.get_or_create(user=soak_op, workspace=wsA, defaults={'role': 'WORKSPACE_OPERATOR'})
 super_ = user('platform-super', 'سوپریوزر پلتفرم', is_staff=True)
 if not super_.is_superuser:
     super_.is_superuser = True; super_.save()

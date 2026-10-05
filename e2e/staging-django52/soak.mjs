@@ -17,7 +17,7 @@ const OPERATOR_ORIGIN = 'https://operator-stg.example.test';
 const IPS = Array.from({ length: 12 }, (_, i) => `127.0.0.${i + 2}`);
 const ADMIN_IP = '127.0.0.30';
 const seed = JSON.parse(fs.readFileSync(env('DJANGO52_SEED_JSON'), 'utf8'));
-const stats = { visitors: 0, sentUp: 0, deliveredUp: 0, sentDown: 0, deliveredDown: 0, reconnects: 0, unexpectedCloses: 0, authFailures: 0, errors: {}, latencyUp: [], latencyDown: [] };
+const stats = { rateLimited: 0, visitors: 0, sentUp: 0, deliveredUp: 0, sentDown: 0, deliveredDown: 0, reconnects: 0, unexpectedCloses: 0, authFailures: 0, errors: {}, latencyUp: [], latencyDown: [] };
 const bump = (k) => { stats.errors[k] = (stats.errors[k] || 0) + 1; };
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const rnd = (a, b) => a + Math.random() * (b - a);
@@ -43,7 +43,7 @@ class Participant {
     const t = await this.ticket();
     if (t.status !== 201) { bump(`ticket_${t.status}`); await sleep(2000); return; }
     const path = this.kind === 'visitor' ? `/v2/widget/${this.conv}/` : `/v2/dashboard/${this.conv}/`;
-    const ws = new WebSocket(`${WS}${path}`, { headers: { Origin: this.kind === 'visitor' ? EMBED : OPERATOR_ORIGIN }, localAddress: this.ip });
+    const ws = new WebSocket(`${WS}/ws${path}`, { headers: { Origin: this.kind === 'visitor' ? EMBED : OPERATOR_ORIGIN }, localAddress: this.ip });
     this.ws = ws; let authed = false;
     ws.on('open', () => ws.send(JSON.stringify({ type: 'auth', ticket: t.json.ticket })));
     ws.on('message', (raw) => this.onFrame(JSON.parse(String(raw)), () => { authed = true; }));
@@ -53,6 +53,7 @@ class Participant {
   async reconnect() { stats.reconnects++; await this.connect(); }
   onFrame(f, markAuth) {
     if (f.type === 'auth.ok') { markAuth(); return; }
+    if (f.type === 'rate_limited') { stats.rateLimited++; return; }
     if (f.type !== 'chat.message' || !f.content) return;
     const sent = this.pending.get(f.content);
     if (sent) { // my own echo
@@ -70,10 +71,22 @@ class Participant {
 let counter = 0;
 const visitors = [], operators = [];
 
+async function operatorJwts() {
+  // staff WebSocket writes are rate-limited PER USER (60/min across all of a user's sockets): a realistic soak uses several staff
+  // identities, like a real team, instead of one account answering every customer
+  const creds = Object.entries(seed.users).filter(([k]) => k.startsWith('soak-op-')).map(([, u]) => [u.email, u.password]);
+  if (!creds.length) throw new Error('seed has no soak-op-* users (run stack.sh seed)');
+  const jwts = [];
+  for (const [email, password] of creds.slice(0, OPERATORS)) {
+    const login = await api('POST', '/api/v1/auth/login/', { body: { email, password } });
+    if (login.status !== 200) throw new Error(`operator login ${email} -> ${login.status}`);
+    jwts.push(login.json.access); await sleep(7000); // nginx allows 10 logins/min per address
+  }
+  return jwts;
+}
+
 async function setup() {
-  const login = await api('POST', '/api/v1/auth/login/', { body: { email: seed.users['agent-a1'].email, password: seed.users['agent-a1'].password } });
-  if (login.status !== 200) throw new Error(`operator login ${login.status}`);
-  const jwt = login.json.access;
+  const jwts = await operatorJwts();
   for (let i = 0; i < VISITORS; i++) {
     const ip = IPS[i % IPS.length];
     const init = await api('POST', '/api/v1/widget/init/', { ip, headers: { Origin: EMBED }, body: { project_key: PROJECT_KEY } });
@@ -86,7 +99,7 @@ async function setup() {
   stats.visitors = visitors.length;
   // each operator watches a slice of the conversations (several sockets per operator, like a busy dashboard)
   visitors.forEach((v, i) => {
-    const o = new Participant('operator', IPS[(i + 3) % IPS.length], `op${i % OPERATORS}`); o.jwt = jwt; o.conv = v.conv; o.visitor = v;
+    const o = new Participant('operator', IPS[(i + 3) % IPS.length], `op${i % OPERATORS}`); o.jwt = jwts[i % jwts.length]; o.conv = v.conv; o.visitor = v;
     o.onVisitorMessage = () => setTimeout(() => { const t = `soak-down-${++counter}`; if (o.send(t)) stats.sentDown++; }, rnd(500, 2500));
     operators.push(o);
   });
@@ -103,7 +116,7 @@ function sample() {
   try { row.pg_conns = +execSync(`PGPASSWORD='${env('DB_PASSWORD_PLAIN')}' psql -h 127.0.0.1 -p ${env('PGPORT', 55432)} -U rastichat_stg -d rastichat_stg -Atc "select count(*) from pg_stat_activity where datname='rastichat_stg'"`).toString().trim(); } catch { /* */ }
   row.sockets_open = [...visitors, ...operators].filter((p) => p.ws?.readyState === WebSocket.OPEN).length;
   row.sent_up = stats.sentUp; row.deliv_up = stats.deliveredUp; row.sent_down = stats.sentDown; row.deliv_down = stats.deliveredDown;
-  row.unexpected_closes = stats.unexpectedCloses; row.reconnects = stats.reconnects;
+  row.rate_limited = stats.rateLimited; row.unexpected_closes = stats.unexpectedCloses; row.reconnects = stats.reconnects;
   fs.appendFileSync(`${OUT}/samples.jsonl`, JSON.stringify(row) + '\n');
   console.log(JSON.stringify(row));
 }
@@ -132,7 +145,7 @@ const summary = {
   minutes: MINUTES, visitors: stats.visitors, operatorSockets: operators.length,
   upstream: { sent: stats.sentUp, delivered: stats.deliveredUp, p50ms: pct(stats.latencyUp, .5), p95ms: pct(stats.latencyUp, .95), max: pct(stats.latencyUp, 1) },
   downstream: { sent: stats.sentDown, delivered: stats.deliveredDown, p50ms: pct(stats.latencyDown, .5), p95ms: pct(stats.latencyDown, .95), max: pct(stats.latencyDown, 1) },
-  reconnects: stats.reconnects, unexpectedCloses: stats.unexpectedCloses, authFailures: stats.authFailures, errors: stats.errors,
+  rateLimitedFrames: stats.rateLimited, operatorIdentities: OPERATORS, reconnects: stats.reconnects, unexpectedCloses: stats.unexpectedCloses, authFailures: stats.authFailures, errors: stats.errors,
 };
 fs.writeFileSync(`${OUT}/summary.json`, JSON.stringify(summary, null, 2)); console.log('SUMMARY', JSON.stringify(summary));
 process.exit(0);
