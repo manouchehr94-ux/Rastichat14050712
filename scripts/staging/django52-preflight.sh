@@ -29,8 +29,10 @@ print("django", django.get_version(), "| drf", rest_framework.VERSION, "| channe
 assert django.VERSION[:2] == (5, 2), "expected Django 5.2"
 PY
 
-step "check --deploy (staging-like settings)"
-"$PY" manage.py check --deploy --fail-level WARNING || fail=1
+step "check --deploy (the exact deploy-gate command: --fail-level WARNING --tag security)"
+# --tag security is required: without it --fail-level WARNING also trips on drf-spectacular's unrelated schema warnings
+# (66 of them on every run), see backend/docker-entrypoint.sh `check-deploy`.
+"$PY" manage.py check --deploy --fail-level WARNING --tag security || fail=1
 
 step "migration drift (no DB writes)"
 "$PY" manage.py makemigrations --check --dry-run || fail=1
