@@ -5,3 +5,5 @@ playwright-report/
 tests/tmp/
 staging-smoke/tmp/
 staging-smoke/smoke-report/
+staging-django52/django52-report/
+staging-django52/test-results/
