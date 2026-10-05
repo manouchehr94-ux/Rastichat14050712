@@ -50,6 +50,7 @@ browser <img>/<audio>     ─► GET /api/v1/attachments/<message>/?sig=…  ─
    `/protected-media/…` → 404.
 4. **Log hygiene**: access logs written before this release (and before `rastichat-log-redaction.conf`) contain attachment file names.
    They are now useless as keys (step 3) but still hold customer-linked paths: rotate/delete per your retention policy.
+   The application server's own access log is covered too: the container runs `python -m config.daphne_server` (a thin Daphne wrapper), which logs method, path, status and size but replaces any query string with `?[redacted]` and masks credential path segments, so `sig=` / `session_token=` never reach container logs. Do not start Daphne with the bare `daphne` command in staging/production.
 
 Rollback: re-run `install-sites.sh` with `CHAT_ATTACHMENTS_PUBLIC=1` (instant, nginx reload) and/or deploy the previous backend — the old code
 issues `/media/…` URLs and nginx serves them in compatibility mode. No database step either way.

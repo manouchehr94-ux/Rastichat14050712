@@ -24,7 +24,7 @@ export REDIS_HOST=127.0.0.1 SECRET_KEY=dev-secret DEBUG=1 CORS_ALLOW_ALL_ORIGINS
 python manage.py migrate
 python seed_data.py   # creates operator@ws.com / admin@ws.com / support@platform.com, all pass1234, plus a sample project + products
 
-daphne -b 0.0.0.0 -p 8080 config.asgi:application
+python -m config.daphne_server -b 0.0.0.0 -p 8080 config.asgi:application
 ```
 
 Verify: `curl http://localhost:8080/api/v1/health/` → `{"status":"healthy",...}`.
