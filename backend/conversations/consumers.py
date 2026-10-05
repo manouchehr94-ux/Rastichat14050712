@@ -12,7 +12,7 @@ from platforms.models import PlatformMembership
 from accounts.presence import touch_presence
 from common.ws_throttling import is_rate_limited
 from common.ws_auth import RevalidatingConsumerMixin, TicketAuthMixin
-from common import ws_tickets
+from common import legacy_credentials, ws_tickets
 from . import ws_access
 from projects.domains import OriginDecision, decide_origin
 
@@ -91,6 +91,7 @@ class OpsEventsMixin:
 
 class WidgetChatConsumer(BaseChatConsumer):
     TICKET_KIND = ws_tickets.KIND_WIDGET
+    LEGACY_SURFACE = legacy_credentials.SURFACE_WIDGET
     session_token = None
     session_id = None
 
@@ -102,6 +103,8 @@ class WidgetChatConsumer(BaseChatConsumer):
         await self.accept()
         await self.join_groups()
         self.authz_enabled = True
+        await legacy_credentials.record_use_async(
+            legacy_credentials.SURFACE_WIDGET, self.conversation.project_id)
 
     async def bind_ticket_identity(self, payload):
         self.conv_id = self.scope['url_route']['kwargs']['conv_id']

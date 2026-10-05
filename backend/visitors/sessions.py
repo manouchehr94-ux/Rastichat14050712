@@ -12,6 +12,8 @@ from django.core.exceptions import ValidationError
 from django.utils import timezone
 from rest_framework.exceptions import APIException
 
+from common import legacy_credentials
+
 from .models import VisitorSession
 
 SESSION_HEADER = 'X-Widget-Session'
@@ -48,8 +50,11 @@ def extract_session_token(request):
     token = data.get('session_token') if hasattr(data, 'get') else None
     if token:
         return token
-    if getattr(settings, 'LEGACY_URL_CREDENTIALS_ENABLED', False) and hasattr(request, 'query_params'):
-        return request.query_params.get('session_token')  # legacy: credentials in the URL get logged
+    if hasattr(request, 'query_params') and legacy_credentials.allowed(legacy_credentials.SURFACE_WIDGET):
+        token = request.query_params.get('session_token')  # legacy: credentials in the URL get logged
+        if token:
+            legacy_credentials.record_use('widget_rest')
+            return token
     return None
 
 
