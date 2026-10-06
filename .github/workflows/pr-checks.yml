@@ -242,7 +242,7 @@ jobs:
           cache-dependency-path: backend/requirements-dev.txt
       - uses: actions/setup-node@v4
         with:
-          node-version: "20"
+          node-version: "22"      # the headless example uses the global WebSocket (Node >= 22)
       - run: pip install -r backend/requirements-dev.txt
       - run: npm ci
         working-directory: packages/widget
