@@ -35,7 +35,8 @@ class InitVisitorView(APIView):
             'mobile': serializer.validated_data.get('mobile'),
         }
 
-        if external_id and settings.WIDGET_ALLOW_UNVERIFIED_EXTERNAL_ID:
+        # `int:` ids belong to integration-asserted (verified) customers: the legacy bridge must never be able to claim one
+        if external_id and settings.WIDGET_ALLOW_UNVERIFIED_EXTERNAL_ID and not external_id.startswith('int:'):
             # LEGACY, insecure bridge (off by default): resolves to an existing
             # Visitor on a browser-supplied identifier. See settings.py.
             logger.warning(

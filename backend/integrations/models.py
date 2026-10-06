@@ -132,3 +132,81 @@ class IntegrationTenantMapping(models.Model):
 
     def __str__(self):
         return f'{self.integration.slug}:{self.external_tenant_id}'
+
+
+class ExternalIdentity(models.Model):
+    """A host's person, linked to the RastiChat identity that represents them.
+
+    * CUSTOMER: scoped to one tenant — links to the (project-scoped) `Visitor`.
+    * STAFF: scoped to the integration — links to a DEDICATED `accounts.User` created for this identity; staff
+      access to tenants/the platform is carried by `ExternalMembership` rows.
+    Never linked to a pre-existing RastiChat user (not even by matching email): an integration can only ever
+    control identities it created itself.
+    """
+
+    class Kind(models.TextChoices):
+        CUSTOMER = 'CUSTOMER', 'Customer'
+        STAFF = 'STAFF', 'Staff'
+
+    class Status(models.TextChoices):
+        ACTIVE = 'ACTIVE', 'Active'
+        DISABLED = 'DISABLED', 'Disabled'
+
+    integration = models.ForeignKey(Integration, on_delete=models.PROTECT, related_name='identities')
+    kind = models.CharField(max_length=10, choices=Kind.choices)
+    external_user_id = models.CharField(max_length=255)
+    tenant_mapping = models.ForeignKey(
+        IntegrationTenantMapping, on_delete=models.PROTECT, null=True, blank=True, related_name='identities')
+    visitor = models.OneToOneField('visitors.Visitor', on_delete=models.PROTECT, null=True, blank=True,
+                                   related_name='external_identity')
+    user = models.OneToOneField('accounts.User', on_delete=models.PROTECT, null=True, blank=True,
+                                related_name='external_identity')
+    status = models.CharField(max_length=10, choices=Status.choices, default=Status.ACTIVE)
+    created_at = models.DateTimeField(auto_now_add=True)
+    last_asserted_at = models.DateTimeField(null=True, blank=True)
+    disabled_at = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(
+                fields=['integration', 'tenant_mapping', 'external_user_id'], condition=models.Q(kind='CUSTOMER'),
+                name='uniq_ext_customer_identity'),
+            models.UniqueConstraint(
+                fields=['integration', 'external_user_id'], condition=models.Q(kind='STAFF'),
+                name='uniq_ext_staff_identity'),
+            models.CheckConstraint(
+                condition=(models.Q(kind='CUSTOMER', tenant_mapping__isnull=False, visitor__isnull=False)
+                           | models.Q(kind='STAFF', tenant_mapping__isnull=True, user__isnull=False)),
+                name='ext_identity_shape'),
+        ]
+
+    def __str__(self):
+        return f'{self.integration.slug}:{self.kind}:{self.external_user_id}'
+
+
+class ExternalMembership(models.Model):
+    """A RastiChat membership created and owned by an integration (so it — and only it — may change or remove it).
+
+    Exactly one of `tenant_mapping` (workspace membership) / `platform` (platform membership) is set.
+    """
+    identity = models.ForeignKey(ExternalIdentity, on_delete=models.CASCADE, related_name='memberships')
+    tenant_mapping = models.ForeignKey(IntegrationTenantMapping, on_delete=models.PROTECT, null=True, blank=True,
+                                       related_name='external_memberships')
+    platform = models.ForeignKey(Platform, on_delete=models.PROTECT, null=True, blank=True,
+                                 related_name='external_memberships')
+    # generic role the host asserted (owner|admin|operator) — never a host-specific role name
+    external_role = models.CharField(max_length=20)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(fields=['identity', 'tenant_mapping'], condition=models.Q(tenant_mapping__isnull=False),
+                                    name='uniq_ext_membership_tenant'),
+            models.UniqueConstraint(fields=['identity', 'platform'], condition=models.Q(platform__isnull=False),
+                                    name='uniq_ext_membership_platform'),
+            models.CheckConstraint(
+                condition=(models.Q(tenant_mapping__isnull=False, platform__isnull=True)
+                           | models.Q(tenant_mapping__isnull=True, platform__isnull=False)),
+                name='ext_membership_exactly_one_scope'),
+        ]

@@ -529,6 +529,7 @@ REST_FRAMEWORK = {
         'widget_start': None if TESTING else os.environ.get('WIDGET_START_THROTTLE_RATE', '20/min'),
         'widget_message': None if TESTING else os.environ.get('WIDGET_MESSAGE_THROTTLE_RATE', '60/min'),
         'support_write': None if TESTING else os.environ.get('SUPPORT_WRITE_THROTTLE_RATE', '60/min'),
+        'identity_exchange': None if TESTING else os.environ.get('IDENTITY_EXCHANGE_THROTTLE_RATE', '60/min'),
         'integration_api': None if TESTING else os.environ.get('INTEGRATION_API_THROTTLE_RATE', '300/min'),
         'widget_init': None if TESTING else os.environ.get('WIDGET_INIT_THROTTLE_RATE', '30/min'),
         'ws_ticket': None if TESTING else os.environ.get('WS_TICKET_THROTTLE_RATE', '120/min'),
@@ -669,5 +670,9 @@ LOGGING = {
 INTEGRATION_TOKEN_AUDIENCE = os.environ.get('INTEGRATION_TOKEN_AUDIENCE', 'rastichat').strip() or 'rastichat'
 INTEGRATION_TOKEN_MAX_TTL_SECONDS = {'api': 60, 'identity': 120}
 INTEGRATION_TOKEN_LEEWAY_SECONDS = 5
+# Lifetime of the dashboard access token issued by staff SSO. No refresh token is issued: the host's next assertion
+# is the renewal, so a staff member removed on the host side is cut off within this window even if no revocation
+# call was made (REST/WS membership checks are immediate when it was).
+INTEGRATION_STAFF_SESSION_MINUTES = int(os.environ.get('INTEGRATION_STAFF_SESSION_MINUTES', 30))
 # Failed integration authentications per client IP per minute before further attempts get 429 (0 = off).
 INTEGRATION_AUTH_FAILURES_PER_MINUTE = 0 if TESTING else int(os.environ.get('INTEGRATION_AUTH_FAILURES_PER_MINUTE', 30))

@@ -18,6 +18,20 @@ export const login = async (email: string, password: string) => {
     return data;
 };
 
+// Host-application SSO: exchange a host-signed assertion (never typed by a user) for a short-lived dashboard token.
+export const ssoLogin = async (assertion: string) => {
+    const res = await fetch(`${API_BASE}/identity/staff/`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ assertion })
+    });
+    if (!res.ok) throw new Error('SSO failed');
+    const data = await res.json();
+    localStorage.setItem('token', data.access);
+    localStorage.setItem('user', JSON.stringify(data.user));
+    return data;
+};
+
 export const getToken = () => localStorage.getItem('token');
 // signed attachment URLs expire: swap in a fresh one (once) when an <img>/<audio> holding one fails to load
 installAttachmentRefresh(API_BASE, getToken);

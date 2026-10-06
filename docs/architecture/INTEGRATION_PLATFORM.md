@@ -20,7 +20,7 @@ tomorrow using only these documents and configuration, with no change to RastiCh
 | Platform (the SaaS owner) | existing `platforms.Platform` | — (chosen at registration) |
 | Tenant | `workspaces.Workspace` via `IntegrationTenantMapping` | external tenant id, display name, verified domains |
 | Project (a widget deployment) | existing `projects.Project` (one default per mapping) | — |
-| Customer / visitor | existing `visitors.Visitor` (+ `ExternalIdentity` in PR B) | trusted assertion |
+| Customer / visitor | existing `visitors.Visitor` (+ `ExternalIdentity`) | trusted assertion |
 | Staff / operator | existing `accounts.User` + `WorkspaceMembership` (+ `ExternalIdentity`) | trusted assertion (generic role) |
 | Platform actor | existing `PlatformMembership` | trusted assertion |
 | Conversation / message / routing / SLA … | existing engine — **unchanged** | — |
@@ -111,7 +111,7 @@ uses the existing scheduler-worker pattern.)
 | Slice | PR | Status |
 |---|---|---|
 | Integration, keys, mapping, signed-request auth, replay protection, scopes, provisioning, lifecycle, audit, throttling, CLI | A | **Implemented** (this PR) |
-| Identity assertions, customer/staff/platform bootstrap, identity upgrade, membership removal | B | Specified |
+| Identity assertions, customer/staff/platform bootstrap, guest upgrade, membership/identity deprovisioning | B | **Implemented** (backend; dashboard SSO landing page: see PR) |
 | Launcher config, pre-chat schema/persistence, widget config API, widget + dashboard UI | C | Specified |
 | Reference (non-RastiSi) host + generic E2E | D | Specified |
 | Platform-initiated conversations | E | Specified |

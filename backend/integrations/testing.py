@@ -12,13 +12,17 @@ from platforms.models import Platform
 from .authentication import body_hash
 from .keys import new_kid
 from .models import Integration, IntegrationKey
-from .scopes import TENANTS_READ, TENANTS_WRITE
+from .scopes import (
+    IDENTITY_CUSTOMER, IDENTITY_PLATFORM, IDENTITY_STAFF, TENANTS_READ, TENANTS_WRITE,
+)
+
+ALL_TEST_SCOPES = (TENANTS_READ, TENANTS_WRITE, IDENTITY_CUSTOMER, IDENTITY_STAFF, IDENTITY_PLATFORM)
 
 
 class FakeHost:
     """A host application: owns a private key, registers the public half with RastiChat, signs requests."""
 
-    def __init__(self, slug='fake-host', platform=None, scopes=(TENANTS_READ, TENANTS_WRITE), key_scopes=None):
+    def __init__(self, slug="fake-host", platform=None, scopes=ALL_TEST_SCOPES, key_scopes=None):
         self.private = Ed25519PrivateKey.generate()
         public_pem = self.private.public_key().public_bytes(
             serialization.Encoding.PEM, serialization.PublicFormat.SubjectPublicKeyInfo).decode()
@@ -49,3 +53,21 @@ class FakeHost:
         if payload is not None:
             kwargs.update(data=body, content_type='application/json')
         return getattr(client, method.lower())(path, **kwargs)
+
+    def assertion(self, actor, sub, tenant=None, role=None, *, ttl=60, **claims):
+        """A signed identity assertion (what the host backend hands to the browser)."""
+        extra = {'actor': actor, 'sub': sub}
+        if tenant is not None:
+            extra['tenant'] = tenant
+        if role is not None:
+            extra['role'] = role
+        extra.update(claims)
+        sub_claim = extra.pop('sub')
+        token_kwargs = {k: extra.pop(k) for k in list(extra) if k in ('audience', 'issuer', 'kid', 'iat', 'jti', 'private')}
+        now = int(token_kwargs.pop('iat', time.time()))
+        payload = {
+            'iss': token_kwargs.get('issuer') or self.integration.slug, 'aud': token_kwargs.get('audience') or 'rastichat:identity',
+            'sub': sub_claim, 'iat': now, 'exp': now + ttl, 'jti': token_kwargs.get('jti') or uuid.uuid4().hex, **extra,
+        }
+        return jwt.encode(payload, token_kwargs.get('private') or self.private, algorithm='EdDSA',
+                          headers={'kid': token_kwargs.get('kid') or self.key.kid})

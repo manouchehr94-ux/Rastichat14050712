@@ -1,6 +1,7 @@
 from django.urls import path, include
 from rest_framework.routers import DefaultRouter
 from visitors.urls import session_urlpatterns
+from integrations.urls import identity_urlpatterns as integration_identity_urlpatterns
 from common.views import HealthCheckView, LivenessView, MonitoringView, ReadinessView
 from conversations.views import (
     CustomerConversationViewSet, PlatformSupportViewSet, WorkspaceSupportViewSet,
@@ -52,6 +53,7 @@ router.register(r'macros', MacroViewSet, basename='macro')
 urlpatterns = [
     path('auth/', include('accounts.urls')),
     path('integrations/', include('integrations.urls')),
+    path('identity/', include((integration_identity_urlpatterns, 'identity'))),
     path('health/', HealthCheckView.as_view(), name='health-check'),
     path('health/live/', LivenessView.as_view(), name='health-live'),
     path('health/ready/', ReadinessView.as_view(), name='health-ready'),

@@ -1,55 +1,22 @@
 """Integration Contract v1 — server-to-server endpoints (`/api/v1/integrations/`)."""
-from rest_framework import serializers as drf_serializers
 from rest_framework import status
-from rest_framework.exceptions import APIException, ValidationError
+from rest_framework.exceptions import ValidationError
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
-from common.middleware import get_current_request_id
-
 from . import provisioning, scopes
 from .authentication import HasIntegrationScope, IntegrationAuthentication, IntegrationRateThrottle
+from .base import CONTRACT_VERSION, ContractEnvelopeMixin
 from .errors import IntegrationAPIError
-from .models import IntegrationTenantMapping, external_id_validator
+from .models import external_id_validator
 from .serializers import TenantUpsertSerializer
 
-CONTRACT_HEADER = 'X-RastiChat-Contract'
-CONTRACT_VERSION = 'integration-v1'
 
-
-class IntegrationAPIView(APIView):
+class IntegrationAPIView(ContractEnvelopeMixin, APIView):
     authentication_classes = [IntegrationAuthentication]
     permission_classes = [HasIntegrationScope]
     throttle_classes = [IntegrationRateThrottle]
     required_scopes = {}
-
-    def finalize_response(self, request, response, *args, **kwargs):
-        response = super().finalize_response(request, response, *args, **kwargs)
-        response[CONTRACT_HEADER] = CONTRACT_VERSION
-        response['Cache-Control'] = 'no-store'
-        return response
-
-    def handle_exception(self, exc):
-        # Any error leaves in the v1 envelope; unexpected exceptions keep DRF/Django's own 500 handling.
-        if isinstance(exc, IntegrationAPIError):
-            return self._envelope(exc.status_code, exc.error_code, exc.message, exc.details)
-        if isinstance(exc, ValidationError):
-            return self._envelope(status.HTTP_400_BAD_REQUEST, 'validation_error', 'Invalid request.', exc.detail)
-        if isinstance(exc, APIException):
-            code = {401: 'unauthenticated', 403: 'forbidden', 404: 'not_found', 405: 'method_not_allowed',
-                    429: 'rate_limited', 415: 'unsupported_media_type'}.get(exc.status_code, 'error')
-            response = self._envelope(exc.status_code, code, str(exc.detail))
-            if exc.status_code == 429 and getattr(exc, 'wait', None):
-                response['Retry-After'] = str(int(exc.wait) + 1)
-            return response
-        return super().handle_exception(exc)
-
-    @staticmethod
-    def _envelope(http_status, code, message, details=None):
-        body = {'code': code, 'message': message, 'request_id': get_current_request_id()}
-        if details:
-            body['details'] = details
-        return Response({'error': body}, status=http_status)
 
 
 class WhoAmIView(IntegrationAPIView):

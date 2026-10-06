@@ -81,9 +81,9 @@ throttled. Redis unavailable → `503 replay_store_unavailable` (fail closed).
 | HTTP | code | meaning |
 |---|---|---|
 | 401 | `missing_token`, `invalid_token`, `token_expired`, `token_replayed`, `binding_mismatch`, `key_revoked` | authentication |
-| 403 | `integration_disabled`, `scope_denied` | authorisation |
-| 400 | `validation_error` (with `details` per field), `invalid_external_id` | request |
-| 404 | `tenant_not_found` | also returned for another integration's tenant (no existence oracle) |
+| 403 | `integration_disabled`, `scope_denied`, `tenant_unavailable`, `tenant_mismatch`, `identity_disabled`, `origin_not_allowed`, `origin_required`, `origin_mismatch` | authorisation |
+| 400 | `validation_error` (with `details` per field), `invalid_external_id`, `invalid_assertion`, `invalid_project` | request |
+| 404 | `tenant_not_found`, `identity_not_found` | also returned for another integration's tenant (no existence oracle) |
 | 409 | `tenant_archived` | restore with `status: "active"` |
 | 429 | `rate_limited` | back off (`Retry-After`) |
 | 503 | `replay_store_unavailable` | retry later |
@@ -128,48 +128,70 @@ throttled. Redis unavailable → `503 replay_store_unavailable` (fail closed).
 | RastiChat-admin-managed | routing, queues, teams, canned replies, macros, SLA, automations, hand-added domains | never touched |
 | Project-managed | launcher, branding, pre-chat (§9) | integration may only seed |
 
-## 7. Identity assertions  **[specified — PR B]**
+## 7. Identity assertions  **[implemented — PR B]**
 A host backend asserts "this browser belongs to this person, in this tenant, in this role". The browser then
 exchanges the assertion for a RastiChat session. Browser-supplied ids are never trusted.
 
 JWT, same keys and header as §3.2, with **`aud` = `<audience>:identity`**, `exp − iat ≤ 120 s` (recommend 60 s),
-single-use `jti`, and:
+single-use `jti`. No request-binding claims (the browser relays it). Claims:
 
 | claim | meaning |
 |---|---|
 | `iss` | integration slug |
-| `sub` | the host's stable id of the person (opaque; ≤ 255) |
-| `tenant` | external tenant id (omitted only for `actor: platform_staff`) |
-| `actor` | `customer` \| `tenant_staff` \| `platform_staff` |
-| `role` | staff only, generic: `owner` \| `admin` \| `operator` (the host maps its own roles; RastiChat never learns them) |
-| `origin` | optional: page origin the assertion is for; if present it must equal the request `Origin` |
-| `name`, `email`, `avatar_url` | optional display data (minimise; email only if verified by the host) |
-| `ctx` | optional small context snapshot (§11) |
-| `scp` | optional scopes; must be ⊆ the key's `identity:*` scopes |
+| `sub` | the host's stable id of the person (opaque; same charset as external ids) |
+| `actor` | `customer` \| `tenant_staff` \| `platform_staff` (needs scope `identity:customer` \| `identity:staff` \| `identity:platform`) |
+| `tenant` | external tenant id (required for `customer` and `tenant_staff`; absent for `platform_staff`) |
+| `role` | staff only, **generic**: `owner` \| `admin` \| `operator`. The host maps its own roles; RastiChat never learns them. Mapped to workspace owner/admin/operator or platform owner/admin/support-agent |
+| `origin` | optional: page origin the assertion is for; when present it must equal the request `Origin` (`origin_mismatch`) |
+| `name` | optional display name (minimise PII). Email/phone are **not** accepted as identity |
 
-Exchanges (CORS-enabled for the project's allowed domains; per-IP and per-subject rate limited):
-* `POST /api/v1/identity/customer/ {project_key, assertion}` → visitor session (same shape as `widget/init`).
-  Requires scope `identity:customer`; the tenant in the assertion must own `project_key`.
-* `POST /api/v1/identity/staff/ {assertion}` → dashboard JWT pair + memberships. Scope `identity:staff`.
-  Staff users and memberships are created/updated idempotently and marked integration-managed.
-  *Delivery to a dashboard page: URL fragment or POST body — never a query string.*
-* `actor: platform_staff` → `PlatformMembership` (scope `identity:platform`).
+### Customer exchange — `POST /api/v1/identity/customer/`
+`{"project_key": "<public key>", "assertion": "<jwt>"}` → `200`
+`{"visitor_id", "session_token", "expires_at", "identity": {"verified": true, "conversations_attached": 0}}`
+(the session is an ordinary visitor session: same expiry/rotation/revocation, header `X-Widget-Session`, WS tickets).
+* CORS-enabled for the project's allowed domains; the project's domain policy is enforced (`origin_required` /
+  `origin_not_allowed`), exactly as for guest `widget/init`.
+* The project must belong to **the same integration and tenant the assertion names** (`tenant_mismatch`), so a valid
+  assertion for tenant A is useless on tenant B's project, and another integration's assertion is useless here.
+* The same `(integration, tenant, sub)` always resolves to the same visitor → history resumes. The same person in two
+  tenants is two isolated visitors. `Visitor.external_id` of verified customers is `int:<slug>:<sub>`; the legacy
+  browser-supplied-`external_id` path can never claim such a value.
 
-Guest ↔ authenticated: a guest visitor is never merged by an external id alone. Upgrade requires a valid assertion
-**and** the guest's own session token; the guest conversation is attached only to that session's visitor.
+### Staff exchange — `POST /api/v1/identity/staff/`
+`{"assertion": "<jwt>"}` → `{"access", "expires_in", "user", "workspace_id", "memberships", "platform_roles"}`.
+* A **dedicated** RastiChat user (unusable password, synthetic email) is created on first sight and linked to
+  `(integration, sub)`. An existing RastiChat user is **never** linked, matched by email, or modified.
+* The membership for the asserted tenant (or the integration's platform for `platform_staff`) is created/updated
+  idempotently and recorded as integration-owned. Roles are re-asserted on every exchange.
+* The access token is a normal dashboard JWT with a short lifetime (`INTEGRATION_STAFF_SESSION_MINUTES`, default 30) and
+  **no refresh token**: the host's next assertion is the renewal. Deliver the assertion to a dashboard page in the
+  **URL fragment or a POST body — never the query string**.
 
-## 8. Deprovisioning & revocation  **[tenant/key/integration: implemented; user/membership: specified — PR B]**
-| Event | Call | Effect |
+### Guest → authenticated upgrade
+Present the assertion **and** the guest's own `X-Widget-Session` on the customer exchange. Only then are that guest's
+conversations (same project) attached to the verified visitor and the guest session revoked. An external id alone never
+merges anything; an assertion without the guest credential attaches nothing; a guest from another project is never
+touched; if the verified visitor already has an open conversation the guest's open one stays with the retired guest
+record (never two open threads for one visitor).
+
+## 8. Deprovisioning & revocation  **[implemented — tenant/key/integration (PR A), user/membership/customer (PR B)]**
+| Event | Call (scope) | Effect |
 |---|---|---|
-| tenant deactivated | `PUT … status:"suspended"` | workspace+project inactive; visitor sessions revoked; staff lose access on next check; sockets close |
-| tenant archived | `DELETE …/tenants/{id}/` | as above, status `archived` |
-| tenant restored | `PUT … status:"active"` | access resumes |
-| membership removed *(PR B)* | `DELETE …/tenants/{id}/members/{user}/` | membership deleted; their sockets close on next revalidation |
-| user disabled *(PR B)* | `POST …/users/{user}/disable/` | all integration-managed memberships removed; sessions revoked |
+| tenant deactivated | `PUT …/tenants/{t}/ {"status":"suspended"}` (`tenants:write`) | workspace+project inactive; visitor sessions revoked; staff REST/WS refuse on next check |
+| tenant archived | `DELETE …/tenants/{t}/` | as above, status `archived` |
+| tenant restored | `PUT … {"status":"active"}` | access resumes |
+| staff role sync / pre-provision | `PUT …/tenants/{t}/members/{user}/ {"role","display_name"?}` (`identity:staff`) | dedicated account + membership ensured |
+| membership removed | `DELETE …/tenants/{t}/members/{user}/` (`identity:staff`) | integration-owned workspace membership **and** team roles removed; REST refuses immediately, sockets close on next revalidation; `{"removed": false}` if nothing to remove |
+| platform staff sync / removal | `PUT\|DELETE …/platform/members/{user}/` (`identity:platform`) | platform membership |
+| staff user disabled | `POST …/users/{user}/disable/` (`identity:staff`) | account deactivated (even unexpired JWTs die), all integration-owned memberships removed; `…/enable/` re-activates (access returns only on the next assertion) |
+| customer disabled | `POST …/tenants/{t}/customers/{user}/disable/` (`identity:customer`) | visitor sessions revoked, exchanges refused; `…/enable/` |
 | key revoked | operator CLI | tokens by that key refused immediately |
 | integration disabled | operator CLI | every endpoint refuses |
 
-History (conversations, messages, attachments) is **retained** in every case; deletion is a separate retention operation.
+An integration can only change/remove memberships **it created**; another integration (or a manually-added member) is
+untouched even with identical ids. History (conversations, messages, attachments) is **retained** in every case; deletion
+is a separate retention operation. Known limitation: conversations still *assigned* to a removed member keep that
+assignee until an admin reassigns them.
 
 ## 9. Widget configuration & pre-chat  **[specified — PR C]**
 `GET /api/v1/widget/config/?project_key=<public key>` (public, Origin-checked) returns a versioned document:
