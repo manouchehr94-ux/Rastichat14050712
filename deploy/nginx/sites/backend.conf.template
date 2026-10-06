@@ -100,22 +100,9 @@ server {
         proxy_set_header Host $host;
     }
 
-    # Uploaded chat/KB attachments — unguessable-filename access control,
-    # same model as local dev (Django's DEBUG-only static() helper), not
-    # authenticated download. The access log never records these paths
-    # (conf.d/rastichat-log-redaction.conf). Moving chat attachments to
-    # authenticated / signed access is the separate P1-6 security PR
-    # (docs/audit/P1_5_PROTECTION_REVIEW.md §2) and gates the RastiSi connection. See "Known limitations" in
-    # docs/runbooks/STAGING_DEPLOYMENT.md for INTERNAL-visibility KB
-    # attachments specifically.
-    location /media/ {
-        alias __MEDIA_HOST_PATH__/;
-        add_header Cache-Control "private, max-age=3600";
-        # A leaked link must not drag the user's other pages along, and a file must never be sniffed into HTML/JS.
-        # (add_header in a location replaces the inherited ones, so these are repeated here.)
-        add_header Referrer-Policy "no-referrer" always;
-        add_header X-Content-Type-Options "nosniff" always;
-    }
+    # Chat attachments are private (signed, authorized URLs answered with X-Accel-Redirect); only knowledge-base attachments stay
+    # public. See snippets/media-locations.conf.template and docs/runbooks/PRIVATE_ATTACHMENTS.md.
+    include /etc/nginx/rastichat/snippets/media-locations.conf;
 
     location /static/ {
         alias __STATIC_HOST_PATH__/;

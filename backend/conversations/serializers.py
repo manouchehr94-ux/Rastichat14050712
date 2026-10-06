@@ -17,11 +17,17 @@ class MessageSerializer(serializers.ModelSerializer):
         ]
 
     def get_attachment_url(self, obj):
+        """A short-lived signed URL bound to whoever this payload is for (see attachment_access). Never the raw /media/ path.
+        `attachment_audience=('c', None)` is passed for room broadcasts; with neither an audience nor an identifiable request
+        there is no URL at all."""
         if not obj.attachment:
             return None
+        from . import attachment_access
         request = self.context.get('request')
-        url = obj.attachment.url
-        return request.build_absolute_uri(url) if request else url
+        audience = self.context.get('attachment_audience') or attachment_access.audience_from_request(request)
+        if audience is None:
+            return None
+        return attachment_access.url_for(obj, audience, request)
 
     def get_seen(self, obj):
         # A message is "seen" once someone from the other side of the conversation has read it.

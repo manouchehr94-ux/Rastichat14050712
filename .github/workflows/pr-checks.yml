@@ -201,6 +201,8 @@ jobs:
         run: sudo apt-get update -qq && sudo apt-get install -y -qq nginx-light
       - name: Log redaction test (throw-away nginx on a high local port)
         run: scripts/nginx/test-log-redaction.sh
+      - name: "Media routing test (private chat attachments - internal location, X-Accel-Redirect, Range)"
+        run: scripts/nginx/test-media-routing.sh
 
   secret-scan:
     runs-on: ubuntu-latest

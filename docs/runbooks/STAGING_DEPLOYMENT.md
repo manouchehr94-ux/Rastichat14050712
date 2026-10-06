@@ -187,11 +187,10 @@ those are unaffected by a project-name change and need no migration step.
   dashboards, but widget endpoints now also accept the domains configured on active projects
   (`Project.allowed_domains`, see `docs/runbooks/PROJECT_ALLOWED_DOMAINS.md`) — a new storefront domain no longer needs an
   environment edit and restart, only a project setting.
-- Uploaded chat/KB attachments (`/media/...`) use the same
-  unguessable-filename access model as local dev, not authenticated
-  per-request access control — anyone with the exact URL can view a
-  file. Acceptable for the current threat model (matches every existing
-  image/voice message), a documented gap if that changes.
+- **Chat attachments are private** (P1-6, `docs/runbooks/PRIVATE_ATTACHMENTS.md`): signed, short-lived URLs authorized on every
+  fetch and streamed by nginx through an `internal` location; `/media/attachments/` is closed by default. Public **knowledge-base**
+  attachments (`/media/kb_attachments/`) keep their stable public URLs. Known limitation: files attached to **INTERNAL-visibility**
+  KB articles are still served by file name like public ones — they have not moved to the signed mechanism.
 - Scenarios 19-20 of the smoke checklist (Redis restart/reconnect,
   container restart persistence) need to restart server-side
   infrastructure and are manual/ops steps — see

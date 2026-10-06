@@ -262,6 +262,15 @@ MEDIA_UPLOAD_MAX_VOICE_BYTES = int(os.environ.get('MEDIA_UPLOAD_MAX_VOICE_BYTES'
 # Dotted path to an optional `callable(file) -> bool` malware-scan hook. Unset by default.
 MEDIA_UPLOAD_SCAN_HOOK = os.environ.get('MEDIA_UPLOAD_SCAN_HOOK', '')
 
+# Private chat attachments (conversations/attachment_access.py): signed URL lifetime, and how an authorized fetch is answered.
+# 'accel' = X-Accel-Redirect to nginx's `internal` location (staging/production: Django authorizes, nginx streams, Range works);
+# 'django' = Django streams the file itself (local development, no nginx).
+ATTACHMENT_URL_TTL_SECONDS = int(os.environ.get('ATTACHMENT_URL_TTL_SECONDS', 600))
+ATTACHMENT_SERVE_MODE = os.environ.get('ATTACHMENT_SERVE_MODE', 'accel' if IS_PRODUCTION_LIKE else 'django')
+if ATTACHMENT_SERVE_MODE not in ('accel', 'django'):
+    raise ImproperlyConfigured('ATTACHMENT_SERVE_MODE must be "accel" or "django".')
+ATTACHMENT_ACCEL_PREFIX = os.environ.get('ATTACHMENT_ACCEL_PREFIX', '/protected-media/')
+
 # ---------------------------------------------------------------------------
 # Redis (Channels layer + health check)
 #
@@ -507,6 +516,9 @@ REST_FRAMEWORK = {
         # Applies per-user (operators) or per-IP (visitors, who are anonymous
         # to DRF) on the image/voice upload endpoints only.
         'media_upload': None if TESTING else os.environ.get('MEDIA_UPLOAD_THROTTLE_RATE', '30/min'),
+        # Signed attachment fetches are per-IP (an <img>/<audio> carries no credential header) and cheap; the URL-minting calls are per-user.
+        'attachment_download': None if TESTING else os.environ.get('ATTACHMENT_DOWNLOAD_THROTTLE_RATE', '600/min'),
+        'attachment_url': None if TESTING else os.environ.get('ATTACHMENT_URL_THROTTLE_RATE', '300/min'),
         # Deliberately tight and IP-scoped — a login endpoint is the classic
         # credential-stuffing target.
         'login': None if TESTING else os.environ.get('LOGIN_THROTTLE_RATE', '10/min'),
