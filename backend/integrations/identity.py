@@ -86,6 +86,7 @@ class Assertion:
         name = claims.get('name')
         self.name = name.strip()[:255] if isinstance(name, str) else ''
         self.origin = claims.get('origin')
+        self.ctx = claims.get('ctx')   # optional host context snapshot (customers only), validated by integrations.context
 
 
 def verify_assertion(raw):
@@ -231,7 +232,7 @@ def enable_identity(integration, key, identity):
 
 
 # --------------------------------------------------------------------- customer
-def customer_identity(integration, key, mapping, external_user_id, display_name=''):
+def customer_identity(integration, key, mapping, external_user_id, display_name='', *, touch=True):
     identity = (ExternalIdentity.objects.select_related('visitor')
                 .filter(integration=integration, kind=ExternalIdentity.Kind.CUSTOMER,
                         tenant_mapping=mapping, external_user_id=external_user_id).first())
@@ -255,8 +256,9 @@ def customer_identity(integration, key, mapping, external_user_id, display_name=
     if display_name and identity.visitor.name != display_name:
         identity.visitor.name = display_name
         identity.visitor.save(update_fields=['name', 'updated_at'])
-    identity.last_asserted_at = timezone.now()
-    identity.save(update_fields=['last_asserted_at'])
+    if touch:
+        identity.last_asserted_at = timezone.now()
+        identity.save(update_fields=['last_asserted_at'])
     return identity
 
 

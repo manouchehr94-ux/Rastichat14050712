@@ -10,6 +10,8 @@ urlpatterns = [
          name='integration-tenant-member'),
     path('tenants/<str:external_tenant_id>/support-conversations/', vi.SupportConversationView.as_view(),
          name='integration-support-conversations'),
+    path('tenants/<str:external_tenant_id>/contexts/<str:external_user_id>/', vi.ContextView.as_view(),
+         name='integration-context'),
     path('platform/members/<str:external_user_id>/', vi.PlatformMemberView.as_view(), name='integration-platform-member'),
     path('users/<str:external_user_id>/disable/', vi.StaffIdentityStateView.as_view(action='disable'),
          name='integration-user-disable'),

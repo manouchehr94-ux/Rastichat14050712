@@ -8,6 +8,7 @@ from rest_framework.views import APIView
 from common.permissions import IsWorkspaceOperator
 from common.tenancy import resolve_operator_workspace
 from conversations.models import Conversation
+from integrations import context as host_context
 from .models import Tag, ConversationTag, Note, CustomerProfile, CustomerOrder
 from .serializers import TagSerializer, NoteSerializer, CustomerOrderSerializer
 
@@ -158,4 +159,6 @@ class CustomerContextView(APIView):
             'pre_chat': list(getattr(getattr(conv, 'pre_chat', None), 'answers', None) or []),
             # True only for customers asserted by a trusted host backend (never for a guest or a browser-claimed id)
             'identity_verified': hasattr(visitor, 'external_identity'),
+            # tenant-scoped snapshot the HOST pushed about this verified customer (None for guests): {profile, context, updated_at}
+            'host_context': host_context.for_visitor(visitor),
         })

@@ -15,6 +15,9 @@ from projects.models import Project
 from visitors.models import VisitorSession
 from visitors.sessions import WidgetOriginNotAllowed, enforce_project_origin, get_valid_session, extract_session_token
 
+from common import observability
+from . import audit
+from . import context as host_context
 from . import identity as ident
 from . import scopes
 from .base import ContractEnvelopeMixin
@@ -70,6 +73,9 @@ class CustomerExchangeView(_ExchangeView):
                 raise IntegrationAPIError('origin_mismatch', 'The assertion was issued for a different origin.', 403)
 
         identity = ident.customer_identity(assertion.integration, assertion.key, mapping, assertion.sub, assertion.name)
+        if assertion.ctx is not None:   # optional host context riding in the signed assertion (same rules as the PUT API)
+            profile, context = host_context.validate_snapshot(assertion.ctx)
+            host_context.store(identity, assertion.key, profile, context)
         upgraded = 0
         guest_token = extract_session_token(request)
         if guest_token:
@@ -77,6 +83,7 @@ class CustomerExchangeView(_ExchangeView):
             if guest is not None:
                 upgraded = ident.upgrade_guest(assertion.integration, assertion.key, identity, guest)
         session = VisitorSession.objects.create(visitor=identity.visitor)
+        observability.emit('identity_exchange', label='customer', integration=assertion.integration.slug, upgraded=bool(upgraded))
         return Response({
             'visitor_id': str(identity.visitor_id),
             'session_token': str(session.token),
@@ -101,6 +108,7 @@ class StaffExchangeView(_ExchangeView):
         else:
             ident.set_platform_membership(assertion.integration, assertion.key, identity, assertion.role)
         access, expires_in = ident.issue_staff_token(identity.user)
+        observability.emit('identity_exchange', label=f'staff_{assertion.actor}', integration=assertion.integration.slug)
         user = identity.user
         return Response({
             'access': access, 'expires_in': expires_in,
@@ -180,6 +188,58 @@ class StaffIdentityStateView(IntegrationAPIView):
         changed = (ident.disable_identity if self.action == 'disable' else ident.enable_identity)(integration, key, identity)
         return Response({'external_user_id': external_user_id, 'status': 'disabled' if self.action == 'disable' else 'active',
                          'changed': changed})
+
+
+class ContextView(IntegrationAPIView):
+    """`PUT|GET|DELETE /api/v1/integrations/tenants/<t>/contexts/<customer>/` — the host pushes a small, flat, tenant-scoped
+    snapshot about one VERIFIED customer; operators see it in the conversation sidebar (Contract v1 §11).
+
+    PUT replaces the whole snapshot (idempotent). Credentials / payment-looking data and nesting are refused. The customer
+    identity is created on first push (it is the same identity the customer's later assertion resolves to)."""
+    required_scopes = {m: (scopes.CONTEXT_WRITE,) for m in ('GET', 'PUT', 'DELETE')}
+
+    def _identity(self, request, external_tenant_id, external_user_id, *, create):
+        integration, key = request.user.integration, request.user.key
+        ident.valid_external_id(external_user_id, 'customer')
+        mapping = ident.resolve_tenant(integration, TenantView._external_id(external_tenant_id))
+        if create:
+            return mapping, ident.customer_identity(integration, key, mapping, external_user_id, touch=False)
+        identity = ExternalIdentity.objects.select_related('visitor').filter(
+            integration=integration, kind=ExternalIdentity.Kind.CUSTOMER, tenant_mapping=mapping,
+            external_user_id=external_user_id).first()
+        if identity is None:
+            raise IntegrationAPIError('identity_not_found', 'Unknown customer.', 404)
+        return mapping, identity
+
+    @staticmethod
+    def _body(row):
+        return {'profile': row.profile, 'context': row.context, 'updated_at': row.updated_at}
+
+    def put(self, request, external_tenant_id, external_user_id):
+        profile, context = host_context.validate_snapshot(request.data if hasattr(request.data, 'get') else None)
+        _, identity = self._identity(request, external_tenant_id, external_user_id, create=True)
+        row = host_context.store(identity, request.user.key, profile, context)
+        audit.record('context_updated', integration=request.user.integration, key=request.user.key,
+                     target_type='external_identity', target_id=identity.pk,
+                     profile_keys=sorted(profile), context_keys=sorted(context))   # key NAMES only, never values
+        observability.emit('context_updated', integration=request.user.integration.slug)
+        return Response({'external_user_id': external_user_id, **self._body(row)})
+
+    def get(self, request, external_tenant_id, external_user_id):
+        _, identity = self._identity(request, external_tenant_id, external_user_id, create=False)
+        row = getattr(identity, 'host_context', None)
+        if row is None:
+            raise IntegrationAPIError('context_not_found', 'No context has been pushed for this customer.', 404)
+        return Response({'external_user_id': external_user_id, **self._body(row)})
+
+    def delete(self, request, external_tenant_id, external_user_id):
+        _, identity = self._identity(request, external_tenant_id, external_user_id, create=False)
+        row = getattr(identity, 'host_context', None)
+        if row is not None:
+            row.delete()
+            audit.record('context_deleted', integration=request.user.integration, key=request.user.key,
+                         target_type='external_identity', target_id=identity.pk)
+        return Response(status=status.HTTP_204_NO_CONTENT)
 
 
 class CustomerIdentityStateView(IntegrationAPIView):

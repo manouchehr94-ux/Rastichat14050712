@@ -51,6 +51,7 @@ interface CustomerContext {
     name: string | null; phone: string | null; location: string; customer_since: string;
     order_count: number; total_spent: string; score: string | null; recent_orders: CustomerOrderSummary[];
     pre_chat?: PreChatAnswer[]; identity_verified?: boolean;
+    host_context?: { profile: Record<string, string | number | boolean>; context: Record<string, string | number | boolean>; updated_at: string } | null;
 }
 const ORDER_STATUS_LABEL: Record<string, string> = {
     PROCESSING: 'در حال پردازش', SHIPPED: 'در حال ارسال', DELIVERED: 'تحویل شده', CANCELLED: 'لغو شده',
@@ -345,6 +346,20 @@ function CustomerInfoPanel({
                             <div key={a.key}>
                                 <dt className="text-[10.5px] text-gray-400">{a.label || a.key}{a.source === 'client' ? ' (از صفحه، تأییدنشده)' : ''}</dt>
                                 <dd className="font-medium break-words">{typeof a.value === 'boolean' ? (a.value ? 'بله' : 'خیر') : a.value}</dd>
+                            </div>
+                        ))}
+                    </dl>
+                </div>
+            )}
+
+            {customerContext?.host_context && (Object.keys(customerContext.host_context.profile).length > 0 || Object.keys(customerContext.host_context.context).length > 0) && (
+                <div className="border border-gray-200 rounded-xl p-4" data-testid="host-context">
+                    <div className="text-xs font-bold text-gray-500 mb-2">اطلاعات ارسال‌شده از برنامهٔ میزبان</div>
+                    <dl className="flex flex-col gap-2 text-xs">
+                        {[...Object.entries(customerContext.host_context.profile), ...Object.entries(customerContext.host_context.context)].map(([k, v]) => (
+                            <div key={k}>
+                                <dt className="text-[10.5px] text-gray-400">{k.replace(/_/g, ' ')}</dt>
+                                <dd className="font-medium break-words">{typeof v === 'boolean' ? (v ? 'بله' : 'خیر') : String(v)}</dd>
                             </div>
                         ))}
                     </dl>

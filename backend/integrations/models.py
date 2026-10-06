@@ -226,3 +226,17 @@ class IdempotencyRecord(models.Model):
 
     class Meta:
         constraints = [models.UniqueConstraint(fields=['integration', 'key'], name='uniq_integration_idempotency_key')]
+
+
+class ExternalContext(models.Model):
+    """Host-pushed, tenant-scoped snapshot about ONE verified customer (Contract v1 §11): small, flat, minimised, replaced as
+    a whole on every push. RastiChat never reads the host's database — this is everything the operator gets.
+
+    `profile`  = display data about the person (e.g. plan/tier, display locale);
+    `context`  = what the conversation is about right now (e.g. current page, order reference).
+    There is deliberately no "sensitive" section: sensitive data is not accepted at all in v1."""
+    identity = models.OneToOneField(ExternalIdentity, on_delete=models.CASCADE, related_name='host_context')
+    profile = models.JSONField(default=dict, blank=True)
+    context = models.JSONField(default=dict, blank=True)
+    source_kid = models.CharField(max_length=64, blank=True, default='')
+    updated_at = models.DateTimeField(auto_now=True)
