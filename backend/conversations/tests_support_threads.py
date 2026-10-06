@@ -334,3 +334,31 @@ class RealtimeTests(World, TransactionTestCase):
         self.assertEqual(count, 1)
         msgs = await database_sync_to_async(lambda: Message.objects.count())()
         self.assertEqual(msgs, 6)
+
+
+class RollbackCompatibilityTests(TestCase):
+    """The previous release does not know the columns added by migration 0008. If the CODE is rolled back while the migrated schema stays
+    (the normal rollback: never reverse migrations on live data), its INSERTs omit those columns — so the database itself must supply
+    the neutral value. Proven here by inserting a row the way the previous release would."""
+
+    def test_new_columns_have_database_level_defaults(self):
+        from django.db import connection
+        with connection.cursor() as cur:
+            cur.execute("""select column_name, column_default from information_schema.columns
+                           where table_name = 'conversations_conversation' and column_name in ('opened_by_side', 'subject_key')""")
+            defaults = dict(cur.fetchall())
+        self.assertEqual(set(defaults), {'opened_by_side', 'subject_key'})
+        for column, default in defaults.items():
+            self.assertIsNotNone(default, f'{column} must have a DB default so the previous release can still insert')
+
+    def test_a_row_inserted_without_the_new_columns_gets_neutral_values(self):
+        from django.db import connection
+        from workspaces.models import Workspace
+        from platforms.models import Platform
+        ws = Workspace.objects.create(name='rb', platform=Platform.objects.create(name='rb-platform'))
+        with connection.cursor() as cur:
+            cur.execute("""insert into conversations_conversation
+                (id, type, status, workspace_id, subject, category, priority, notes, created_at, updated_at)
+                values (gen_random_uuid(), 'CUSTOMER', 'OPEN', %s, 'old-code insert', '', 'NORMAL', '', now(), now())
+                returning opened_by_side, subject_key""", [ws.pk])
+            self.assertEqual(cur.fetchone(), ('', ''))

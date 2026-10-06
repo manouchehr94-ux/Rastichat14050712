@@ -61,8 +61,10 @@ class Conversation(models.Model):
 
     # PLATFORM_SUPPORT conversations: which side opened the thread, and an optional stable key that makes
     # "start or resume" idempotent (at most ONE active thread per workspace + key). Empty on legacy rows / customer chats.
-    opened_by_side = models.CharField(max_length=10, choices=Side.choices, blank=True, default='')
-    subject_key = models.CharField(max_length=64, blank=True, default='')
+    # db_default: the DATABASE supplies the neutral value too, so the PREVIOUS release (which does not know these columns) keeps working
+    # against a migrated schema — rolling the code back never requires reversing the migration (expand/contract discipline)
+    opened_by_side = models.CharField(max_length=10, choices=Side.choices, blank=True, default='', db_default='')
+    subject_key = models.CharField(max_length=64, blank=True, default='', db_default='')
 
     class Meta:
         constraints = [

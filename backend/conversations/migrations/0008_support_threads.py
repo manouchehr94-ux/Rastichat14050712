@@ -24,13 +24,14 @@ class Migration(migrations.Migration):
                 blank=True,
                 choices=[("TENANT", "Tenant"), ("PLATFORM", "Platform")],
                 default="",
+                db_default="",
                 max_length=10,
             ),
         ),
         migrations.AddField(
             model_name="conversation",
             name="subject_key",
-            field=models.CharField(blank=True, default="", max_length=64),
+            field=models.CharField(blank=True, default="", db_default="", max_length=64),
         ),
         migrations.AddConstraint(
             model_name="conversation",
