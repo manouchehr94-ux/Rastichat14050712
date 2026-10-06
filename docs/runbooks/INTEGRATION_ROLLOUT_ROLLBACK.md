@@ -15,7 +15,7 @@ Related: `docs/runbooks/DEPLOYMENT_ROLLBACK.md` (generic deploy/rollback),
   return `401/404` and the legacy widget path is unchanged
   (`start_mode` defaults to `on_load` for existing projects).
 * The host adapter is **off by default**: the RastiSi side requires
-  `RASTICHAT_ENABLED=1` globally *and* a per-store enablement. Rolling out the
+  `RASTICHAT_INTEGRATION_ENABLED=1` globally *and* a per-store enablement. Rolling out the
   code changes no store's behaviour.
 * Deploy order is always: RastiChat first, host adapter second, per-store
   enablement last. Rollback is the reverse.
@@ -62,9 +62,11 @@ python manage.py integration_key_add --integration rastisi --public-key-file <pu
 * Verify with a signed `GET /integrations/me/` from the host (staging first).
 
 ### Step 3 — deploy the RastiSi adapter (still dark)
-* Set env on the host: `RASTICHAT_ENABLED=1`, `RASTICHAT_API_BASE`,
-  `RASTICHAT_WS_BASE`, `RASTICHAT_PRIVATE_KEY(_FILE)`, `RASTICHAT_KEY_ID`,
-  `RASTICHAT_INTEGRATION_SLUG`. Settings are validated at boot and fail fast.
+* Set env on the host: `RASTICHAT_INTEGRATION_ENABLED=1`, `RASTICHAT_BASE_URL`,
+  `RASTICHAT_WS_BASE` (optional), `RASTICHAT_WIDGET_URL`,
+  `RASTICHAT_DASHBOARD_URL`, `RASTICHAT_PLATFORM_DASHBOARD_URL`,
+  `RASTICHAT_PRIVATE_KEY` or `RASTICHAT_PRIVATE_KEY_FILE`, `RASTICHAT_KEY_ID`
+  (the `kid` printed by `integration_key_add`), `RASTICHAT_INTEGRATION_SLUG`. Settings are validated at boot and fail fast.
 * With no store enabled, storefront pages render **no** chat markup. Verify
   with a page diff against the previous release.
 
@@ -85,7 +87,7 @@ between increments.
 | Symptom | Action | Blast radius |
 |---|---|---|
 | One store misbehaving | Platform admin → store → *Chat* → disable (or suspend tenant via API). Widget disappears, workspace is set inactive, **history retained**. | one store |
-| Adapter problem across stores | Set `RASTICHAT_ENABLED=0` on the host and restart. No chat markup rendered, hooks become no-ops. | host-wide, no data loss |
+| Adapter problem across stores | Set `RASTICHAT_INTEGRATION_ENABLED=0` on the host and restart. No chat markup rendered, hooks become no-ops. | host-wide, no data loss |
 | Integration compromised / key leak | `integration_key_revoke --kid <kid> --reason <text>`; or `integration_set_active --slug rastisi --disable`. All host tokens stop verifying immediately (keys are looked up on every request). Rotate the host key, add the new kid. | integration |
 | RastiChat release defect | Redeploy the previous RastiChat image. Migrations are additive and the previous code ignores the new tables/columns; **do not reverse migrations** unless data loss is acceptable. | RastiChat |
 
