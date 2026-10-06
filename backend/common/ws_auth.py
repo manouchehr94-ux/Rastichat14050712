@@ -13,9 +13,15 @@ The check is memoised for `settings.WS_REVALIDATE_SECONDS` (default 5s) so
 a chatty room costs at most one authorization query per socket per window;
 that window is the upper bound on how long a revoked client can still
 receive. Set it to 0 to check every event (tests do).
+
+Event-driven checks alone leave one gap, found on the isolated staging stack: an IDLE socket (no frame, no event) of a user who
+was just deactivated stays open indefinitely — it receives nothing, but it "stays connected". A per-socket timer therefore also
+re-checks every `settings.WS_REVALIDATE_INTERVAL_SECONDS` (default 30s, jittered, 0 disables) and closes with 4403.
 """
 import asyncio
 import json
+import logging
+import random
 import time
 
 from django.conf import settings
@@ -24,12 +30,14 @@ from . import legacy_credentials
 from .ws_tickets import consume_ticket
 
 CLOSE_CODE_REVOKED = 4403
+logger = logging.getLogger(__name__)
 
 
 class RevalidatingConsumerMixin:
     authz_enabled = False  # flipped on by connect() once the socket is authorized
     _authz_ok_at = None
     _authz_revoked = False
+    _periodic_task = None
 
     async def is_still_authorized(self) -> bool:  # pragma: no cover - overridden
         return True
@@ -38,15 +46,45 @@ class RevalidatingConsumerMixin:
         pass
 
     async def dispatch(self, message):
+        kind = message.get('type')
+        if kind == 'websocket.disconnect':
+            self._stop_periodic_check()
         if self._authz_revoked:
-            if message.get('type') == 'websocket.disconnect':
+            if kind == 'websocket.disconnect':
                 await super().dispatch(message)
             return  # drop everything else for a revoked socket
-        if self.authz_enabled and message.get('type') != 'websocket.disconnect':
+        if self.authz_enabled and kind != 'websocket.disconnect':
             if not await self._authorized_now():
                 await self._revoke()
                 return
         await super().dispatch(message)
+        if kind == 'websocket.connect':
+            self._start_periodic_check()
+
+    def _start_periodic_check(self):
+        if self._periodic_task is None and getattr(settings, 'WS_REVALIDATE_INTERVAL_SECONDS', 30):
+            self._periodic_task = asyncio.ensure_future(self._periodic_check())
+
+    def _stop_periodic_check(self):
+        task, self._periodic_task = self._periodic_task, None
+        if task is not None and not task.done():
+            task.cancel()
+
+    async def _periodic_check(self):
+        while not self._authz_revoked:
+            interval = getattr(settings, 'WS_REVALIDATE_INTERVAL_SECONDS', 30)
+            await asyncio.sleep(interval * random.uniform(0.8, 1.2))
+            if not self.authz_enabled or self._authz_revoked:
+                continue  # not authenticated yet (ticket mode), or already closing
+            try:
+                self._authz_ok_at = None  # force a fresh look, ignoring the event-driven memo
+                if not await self.is_still_authorized():
+                    await self._revoke()
+                    return
+            except asyncio.CancelledError:
+                raise
+            except Exception:  # a transient database error must not end the watch (nor close the socket)
+                logger.warning('periodic websocket re-authorization failed', exc_info=True)
 
     async def _authorized_now(self) -> bool:
         interval = getattr(settings, 'WS_REVALIDATE_SECONDS', 5)
@@ -60,6 +98,8 @@ class RevalidatingConsumerMixin:
 
     async def _revoke(self):
         self._authz_revoked = True
+        if asyncio.current_task() is not self._periodic_task:
+            self._stop_periodic_check()
         try:
             await self.leave_groups()
         finally:

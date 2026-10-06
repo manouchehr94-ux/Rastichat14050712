@@ -42,16 +42,34 @@ export async function openWidgetAt(page: Page, origin: string) {
 
 export async function loginOperator(page: Page) {
   await page.goto(`${OPERATOR_URL}/login`);
-  await page.locator('input[type="email"]').fill(OPERATOR_EMAIL);
+  await page.locator('input[type="email"], form input[type="text"]').fill(OPERATOR_EMAIL);
   await page.locator('input[type="password"]').fill(OPERATOR_PASSWORD);
   await page.getByRole('button', { name: 'ورود' }).click();
-  await page.waitForURL(`${OPERATOR_URL}/`);
+  await page.waitForURL((u) => u.toString().replace(/\/$/, '') === OPERATOR_URL);
 }
 
 export async function sendWidgetText(page: Page, text: string) {
   await page.locator('#rasti-input').fill(text);
   await page.locator('#rasti-send').click();
   await expect(page.locator('.rasti-msg.visitor .rasti-bubble', { hasText: text })).toBeVisible();
+}
+
+/**
+ * Lets a test cut ONE page's widget websocket (and refuse its reconnects) while everything else (REST, other pages, the
+ * operator dashboard) keeps working: a per-visitor network outage. Call before the page opens the widget.
+ */
+export async function widgetSocketGate(page: Page) {
+  let blocked = false;
+  const live: Array<{ page: { close(o?: { code?: number }): void }; server: { close(): void } }> = [];
+  await page.routeWebSocket(/\/ws\/v2\/widget\//, (route) => {
+    if (blocked) { route.close({ code: 1006 }); return; }
+    const server = route.connectToServer();
+    live.push({ page: route, server });
+  });
+  return {
+    cut() { blocked = true; for (const l of live.splice(0)) { try { l.server.close(); } catch { /* already closed */ } try { l.page.close({ code: 1006 }); } catch { /* already closed */ } } },
+    restore() { blocked = false; },
+  };
 }
 
 export function authFrames(log: SocketLog) {

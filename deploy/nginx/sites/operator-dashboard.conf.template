@@ -39,14 +39,14 @@ server {
     error_log  /var/log/nginx/rastichat-operator-error.log;
 
     location /_next/static/ {
-        limit_req zone=rastichat_general burst=40 nodelay;
+        limit_req zone=rastichat_general burst=150 nodelay;
         add_header Cache-Control "public, max-age=31536000, immutable";
         proxy_pass http://127.0.0.1:__OPERATOR_PORT__;
         include /etc/nginx/rastichat/snippets/proxy-params.conf;
     }
 
     location / {
-        limit_req zone=rastichat_general burst=40 nodelay;
+        limit_req zone=rastichat_general burst=150 nodelay;
         proxy_pass http://127.0.0.1:__OPERATOR_PORT__;
         include /etc/nginx/rastichat/snippets/proxy-params.conf;
     }
