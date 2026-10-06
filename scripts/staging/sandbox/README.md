@@ -15,6 +15,29 @@ the result of the matrix is reproducible, not because they are deployment toolin
 Django shell from stdin, `STG_BALANCER_PIDFILE` = a balancer that understands SIGUSR1/SIGUSR2 for outage/restore); they skip themselves
 when the hooks are absent.
 
+## Quick start (fresh box)
+```bash
+export SANDBOX_DIR=/tmp/sbx VENV=/tmp/venv           # venv = python with backend/requirements.txt (+ requirements-dev.txt)
+bash scripts/staging/sandbox/setup.sh                # once: CA/TLS, hosts, DB, env files, dashboards, nginx, seed, test integrations
+bash scripts/staging/sandbox/start.sh                # 2 Daphne workers + balancer + dashboards + widget server + nginx
+SI_PYTHON=<rastisi venv python> RASTISI_DIR=<rastisi checkout at the PR tip> bash scripts/staging/sandbox/run-matrix.sh <label> [soak-minutes]
+```
+`setup.sh` is idempotent and reproducible. Two details learned the hard way: (1) the `*.example.test` names resolve to **192.0.2.2** (an alias
+on `lo`), not 127.0.0.1 — recent Chromium blocks requests from a "public" page (the fake embedding origins) to loopback, which hangs every browser
+test that embeds the widget; (2) Chromium trusts the sandbox CA through the NSS database (`certutil`), the specs run with `ignoreHTTPSErrors:false`.
+
+## What the matrix covers (stage names in `$SANDBOX_DIR/evidence/final/<label>/SUMMARY.md`)
+| Stage | Proves |
+|---|---|
+| 00 preflight, 01 empty-DB migrate, **01b upgrade-style migration** | settings guardrails; fresh DB; synthetic EXISTING data created by the previous release (`origin/main`) survives the new migrations, new code works on it, every new migration is reversible and re-applies |
+| 02 backend suite, 02b security checks, 03 JS (unit/lint-gate/typecheck/build), 03b widget, 04-05 nginx tests | CI-equivalent gates: migrations drift, Bandit, pip-audit, secret scan, vitest, ESLint baseline gate, builds, private-attachment routing + Range, log redaction |
+| 06 health, 06b login limiter | stack up behind nginx TLS; the real limiter is proven before it is relaxed for the browser suites |
+| 07 `staging-django52` Playwright (3 device projects) | WS tickets, reconnect + history resync, allowed domains/CORS/Origin, visitor sessions, attachments, live multi-worker + revocation, RTL/mobile |
+| **07b `integration-staging`** | Integration Contract over real HTTPS/WSS behind nginx: idempotent provisioning, expired/replayed/wrong-audience/issuer/integration/forged/tampered/alg-confusion assertions, disabled integration, tenant + multi-store isolation, tenant admin ⇄ platform, platform → tenant first message (idempotent), close/reopen, WebSocket across both workers, live revocation, suspend/archive |
+| **07c reference host on staging** (`STACK=staging e2e/reference-host/run.sh`) | a non-RastiSi host: icon-only / one-question / structured pre-chat, guest + trusted customer, staff SSO, headless path, mobile |
+| **07d RastiSi cross-system on staging** (`STACK=staging e2e/rastisi/run.sh`) | the three RastiSi directions, two stores, multi-store owner, operator without admin rights, wrong store, flag off, revocation — the RastiSi adapter talking to the staging RastiChat over TLS |
+| 07e cool-down, 08 soak, 09 log review, 10 rollback rehearsal, 11 final health | memory/ticket-key/unexpected-close checks; no asyncio/event-loop errors, no credentials in any log; roll back to the previous release and forward again |
+
 ## State directory
 `export SANDBOX_DIR=<dir>`; it must hold `stg/` with: `backend.env` (Django env, `export` lines; DB `rasti_stg`, Redis db 5,
 `ENVIRONMENT=staging`, throw-away secrets), `env.staging` (input for `install-sites.sh`), `ca.crt` (the local CA), `keys.json`
