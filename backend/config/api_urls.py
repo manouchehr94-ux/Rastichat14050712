@@ -51,6 +51,7 @@ router.register(r'macros', MacroViewSet, basename='macro')
 
 urlpatterns = [
     path('auth/', include('accounts.urls')),
+    path('integrations/', include('integrations.urls')),
     path('health/', HealthCheckView.as_view(), name='health-check'),
     path('health/live/', LivenessView.as_view(), name='health-live'),
     path('health/ready/', ReadinessView.as_view(), name='health-ready'),

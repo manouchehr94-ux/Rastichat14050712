@@ -187,3 +187,12 @@ staging/production (needs the internal nginx location installed by `scripts/ngin
 `ATTACHMENT_DOWNLOAD_THROTTLE_RATE` (600/min per address) and `ATTACHMENT_URL_THROTTLE_RATE` (300/min per user) throttle fetches and refreshes.
 The nginx side has one install-time switch: `CHAT_ATTACHMENTS_PUBLIC=1` re-opens the old public `/media/attachments/` URLs as a temporary
 compatibility measure (default `0`).
+
+## `INTEGRATION_TOKEN_AUDIENCE`, `INTEGRATION_API_THROTTLE_RATE`, `INTEGRATION_AUTH_FAILURES_PER_MINUTE`
+
+Integration platform (see `docs/integrations/INTEGRATION_CONTRACT_V1.md`, `docs/runbooks/INTEGRATION_PROVISIONING_SECURITY.md`).
+All optional and non-secret — there is **no** shared integration signing secret anywhere in RastiChat's configuration
+(hosts sign with their own Ed25519 private keys; only public keys are stored). `INTEGRATION_TOKEN_AUDIENCE` (`rastichat`) is the
+audience prefix of host tokens (`<audience>:api`, `<audience>:identity`) — use a different value per environment.
+`INTEGRATION_API_THROTTLE_RATE` (`300/min`) is the per-integration request budget; `INTEGRATION_AUTH_FAILURES_PER_MINUTE` (`30`,
+0 = off) caps failed integration authentications per client IP.
