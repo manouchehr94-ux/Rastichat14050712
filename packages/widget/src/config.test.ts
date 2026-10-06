@@ -246,6 +246,29 @@ describe('RastiChat widget — remote configuration', () => {
       expect(FakeWebSocket.instances).toHaveLength(1);
     });
 
+    it('a message sent while the initial session/conversation setup is still running is queued and delivered — never dropped', async () => {
+      setConfig({ behavior: { start_mode: 'on_load' } });
+      let releaseInit!: () => void;
+      const initGate = new Promise<void>((resolve) => { releaseInit = resolve; });
+      const base = fetchMock.getMockImplementation()!;
+      fetchMock.mockImplementation((url: string, ...rest: unknown[]) => {
+        if (url.includes('/widget/init/')) return initGate.then(() => res({ session_token: 'guest-1' }));   // the session is slow to arrive
+        return base(url, ...rest);
+      });
+      window.RastiChat.init({ projectKey: 'proj-1' });
+      await flush(4);
+      (document.getElementById('rasti-launcher') as HTMLElement).click();
+      const input = document.getElementById('rasti-input') as HTMLInputElement;
+      input.value = 'too early?';
+      (document.getElementById('rasti-send') as HTMLElement).click();
+      expect(input.value).toBe('');                                            // accepted, not silently ignored
+      expect(document.querySelector('.rasti-pending')).not.toBeNull();         // shown as pending
+      releaseInit();
+      await flush(12);
+      expect(startBodies()).toHaveLength(1);                                   // the initial setup created the one conversation (no racing second start)
+      expect(FakeWebSocket.instances[0].sent.map((m) => JSON.parse(m).message)).toEqual(['too early?']);
+    });
+
     it('legacy start mode on_load is unchanged (conversation created on page load)', async () => {
       setConfig({ behavior: { start_mode: 'on_load' } });
       await init();

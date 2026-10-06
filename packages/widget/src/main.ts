@@ -195,6 +195,8 @@ class RastiChatWidget {
     private preChatAnswers: Record<string, string | boolean> | null = null;
     private preChatDone = false;
     private startingChat: Promise<void> | null = null;
+    /** false while the first session/conversation setup (initSession) is still running; a send during that window is queued, never dropped */
+    private initDone = false;
     private unavailable = false;
     private destroyed = false;
     private listeners: { target: EventTarget; type: string; fn: EventListener }[] = [];
@@ -861,6 +863,8 @@ class RastiChatWidget {
         } catch (error) {
             console.error("RastiChat init failed", error);
             this.setUnavailable(this.strings.unavailable);
+        } finally {
+            this.initDone = true;
         }
     }
 
@@ -1266,8 +1270,11 @@ class RastiChatWidget {
     private sendMessage() {
         const text = this.inputField.value.trim();
         if (!text) return;
-        const lazy = !this.convId && this.startMode !== 'on_load' && !this.unavailable;
-        if (!lazy && (!this.convId || !this.sessionToken)) return;
+        const notReady = !this.convId || !this.sessionToken;
+        if (notReady && this.unavailable) return;
+        // Not ready yet = either the first message of a lazily started conversation, or the visitor was quicker than the initial
+        // session/conversation setup. Both cases queue the message (shown as pending) instead of dropping it silently.
+        const lazy = notReady;
 
         const clientId = 'msg_' + Date.now() + '_' + Math.random().toString(36).slice(2, 8);
         if (lazy || !this.canSend()) {
@@ -1283,8 +1290,9 @@ class RastiChatWidget {
             this.inputField.value = '';
             this.scrollToBottom();
             if (lazy) {
-                // first message: open the conversation now; the queued message goes out (in order) once the socket authenticates
-                void this.ensureConversation();
+                // first message: open the conversation now; the queued message goes out (in order) once the socket authenticates.
+                // While the initial setup is still running it will create the conversation itself — do not race it with a second start.
+                if (this.initDone || this.startMode !== 'on_load') void this.ensureConversation();
                 return;
             }
             this.offlineBanner.classList.add('show');
