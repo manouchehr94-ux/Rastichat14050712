@@ -204,6 +204,68 @@ jobs:
       - name: "Media routing test (private chat attachments - internal location, X-Accel-Redirect, Range)"
         run: scripts/nginx/test-media-routing.sh
 
+  e2e-reference-host:
+    # Proof of reuse: a NON-RastiSi host (examples/reference-host) provisions a tenant through the public Integration Contract
+    # and drives the widget + operator dashboard in real Chromium (guest, trusted customer, staff SSO, pre-chat modes, mobile).
+    # Fully local and synthetic: throw-away databases, localhost only. (The RastiSi cross-system E2E needs a RastiSi checkout and is
+    # run in the isolated staging matrix instead — see docs/runbooks/INTEGRATION_ROLLOUT_ROLLBACK.md.)
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:15-alpine
+        env:
+          POSTGRES_USER: rastichat
+          POSTGRES_PASSWORD: rastichat_ci_secret
+          POSTGRES_DB: postgres
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U rastichat"
+          --health-interval 5s --health-timeout 5s --health-retries 10
+      redis:
+        image: redis:7-alpine
+        ports: ["6379:6379"]
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s --health-timeout 5s --health-retries 10
+    env:
+      DB_HOST: localhost
+      DB_USER: rastichat
+      DB_PASSWORD: rastichat_ci_secret
+      REDIS_HOST: localhost
+      E2E_LOG_DIR: /tmp/e2e-logs
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: backend/requirements-dev.txt
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+      - run: pip install -r backend/requirements-dev.txt
+      - run: npm ci
+        working-directory: packages/widget
+      - run: npm ci
+        working-directory: apps/operator-dashboard
+      - run: npm ci
+        working-directory: e2e
+      - name: Install Chromium for Playwright
+        working-directory: e2e
+        run: npx playwright install --with-deps chromium
+      - name: Reference-host E2E
+        working-directory: e2e
+        run: |
+          export PW_CHROMIUM="$(node -e "console.log(require('@playwright/test').chromium.executablePath())")"
+          E2E_PYTHON="$(which python)" bash reference-host/run.sh
+      - name: Upload service logs on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-reference-host-logs
+          path: /tmp/e2e-logs
+          if-no-files-found: ignore
+
   secret-scan:
     runs-on: ubuntu-latest
     steps:
