@@ -178,3 +178,12 @@ Default off. When on, a project whose `allowed_domains` is empty is refused (403
 `SUPPORT_WRITE_THROTTLE_RATE` (60/min per user) limits support/operator write endpoints; `WIDGET_INIT_THROTTLE_RATE` (30/min per IP) limits
 session creation; `STAFF_WS_MESSAGE_RATE_LIMIT` / `..._WINDOW_SECONDS` (60 per 60 s per user) limit messages sent over operator and
 support WebSockets (the client is told with a `rate_limited` frame). All are disabled under `manage.py test`. See `docs/audit/P1_5_PROTECTION_REVIEW.md`.
+
+## `ATTACHMENT_URL_TTL_SECONDS`, `ATTACHMENT_SERVE_MODE`, `ATTACHMENT_ACCEL_PREFIX`, `ATTACHMENT_*_THROTTLE_RATE`
+
+Private chat attachments (signed URLs, authorized on every fetch, streamed by nginx via `X-Accel-Redirect`) — see
+`docs/runbooks/PRIVATE_ATTACHMENTS.md`. `ATTACHMENT_URL_TTL_SECONDS` (600) is the URL lifetime; `ATTACHMENT_SERVE_MODE` is `accel` on
+staging/production (needs the internal nginx location installed by `scripts/nginx/install-sites.sh`) and `django` for local development;
+`ATTACHMENT_DOWNLOAD_THROTTLE_RATE` (600/min per address) and `ATTACHMENT_URL_THROTTLE_RATE` (300/min per user) throttle fetches and refreshes.
+The nginx side has one install-time switch: `CHAT_ATTACHMENTS_PUBLIC=1` re-opens the old public `/media/attachments/` URLs as a temporary
+compatibility measure (default `0`).

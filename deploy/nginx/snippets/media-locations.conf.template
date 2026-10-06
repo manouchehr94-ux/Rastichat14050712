@@ -1,0 +1,32 @@
+# Media locations of the backend server block. Rendered by scripts/nginx/install-sites.sh (tokens substituted) into
+# /etc/nginx/rastichat/snippets/media-locations.conf and included by sites/backend.conf.template.
+#
+# PRIVATE chat attachments are no longer reachable by file name. Django authorizes every fetch of
+# /api/v1/attachments/<message>/?sig=… (conversations/attachment_access.py) and answers with `X-Accel-Redirect: /protected-media/<file>`;
+# nginx then streams the file from this INTERNAL location (Range requests work, no file passes through Python). `internal` means a
+# direct request from the internet to /protected-media/ is answered 404 by nginx itself.
+location /protected-media/ {
+    internal;
+    alias __MEDIA_HOST_PATH__/;
+    # headers sent by the upstream survive an internal redirect only for Content-Type / Cache-Control / Content-Disposition (Django sets
+    # `Cache-Control: private, no-store`; adding it here would duplicate it), so the rest is repeated here
+    add_header Referrer-Policy "no-referrer" always;
+    add_header X-Content-Type-Options "nosniff" always;
+}
+
+# Public knowledge-base attachments keep their stable public URLs: they are meant to be public. (INTERNAL-visibility KB files are
+# the known limitation recorded in docs/runbooks/STAGING_DEPLOYMENT.md and are not part of this change.)
+location ^~ /media/kb_attachments/ {
+    alias __MEDIA_HOST_PATH__/kb_attachments/;
+    add_header Cache-Control "public, max-age=3600";
+    add_header Referrer-Policy "no-referrer" always;
+    add_header X-Content-Type-Options "nosniff" always;
+}
+
+# Temporary compatibility switch (CHAT_ATTACHMENTS_PUBLIC=1 at install time): rendered EMPTY unless the owner asks for it.
+include __SNIPPETS_DIR__/chat-media-open.conf;
+
+# Everything else under /media/ — notably every chat attachment — is not public.
+location /media/ {
+    return 404;
+}

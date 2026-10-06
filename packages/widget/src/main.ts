@@ -318,6 +318,8 @@ class RastiChatWidget {
         `;
         this.launcher = document.getElementById('rasti-launcher')!;
         this.panel = document.getElementById('rasti-panel')!;
+        // signed attachment URLs expire (10 min): on a failed <img>/<audio> ask for a fresh one, once
+        this.panel.addEventListener('error', (e) => { void this.refreshAttachment(e); }, true);
         this.messagesContainer = document.getElementById('rasti-messages')!;
         this.inputField = document.getElementById('rasti-input') as HTMLInputElement;
         this.composerBar = document.getElementById('rasti-bar')!;
@@ -579,6 +581,22 @@ class RastiChatWidget {
         } catch (error) {
             console.error("RastiChat history load failed", error);
         }
+    }
+
+    private async refreshAttachment(event: Event): Promise<void> {
+        const el = event.target;
+        if (!(el instanceof HTMLImageElement || el instanceof HTMLAudioElement)) return;
+        const id = /\/attachments\/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\//.exec(el.getAttribute('src') || '')?.[1];
+        if (!id || !this.sessionToken || el.dataset.rastiRetried) return;
+        el.dataset.rastiRetried = '1'; // a really missing file must not loop
+        try {
+            const res = await fetch(`${this.apiBase}/widget/attachments/${id}/refresh/`, { headers: { 'X-Widget-Session': this.sessionToken } });
+            if (!res.ok) return;
+            const body = await res.json();
+            if (!body.attachment_url) return;
+            el.setAttribute('src', body.attachment_url);
+            if (el instanceof HTMLAudioElement) el.load();
+        } catch { /* leave the broken media as it is */ }
     }
 
     private canSend(): boolean {

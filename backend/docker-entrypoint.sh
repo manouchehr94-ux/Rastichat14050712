@@ -23,7 +23,7 @@ case "$1" in
     # more container replicas behind Nginx, not more threads in one process
     # (Daphne is single-process asyncio, like gunicorn's `-k uvicorn.workers`
     # equivalent — horizontal, not thread-pool, scaling is the supported path).
-    exec daphne -b 0.0.0.0 -p "${PORT:-8000}" --application-close-timeout "${DAPHNE_CLOSE_TIMEOUT:-10}" config.asgi:application
+    exec python -m config.daphne_server -b 0.0.0.0 -p "${PORT:-8000}" --application-close-timeout "${DAPHNE_CLOSE_TIMEOUT:-10}" config.asgi:application
     ;;
   migrate)
     exec python manage.py migrate --noinput

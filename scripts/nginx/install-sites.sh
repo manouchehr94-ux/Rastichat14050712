@@ -67,6 +67,7 @@ echo "Installed shared snippets to $RASTICHAT_SNIPPETS_DIR and rate-limit/websoc
 render() {
   local template="$1"
   sed \
+    -e "s|__SNIPPETS_DIR__|${RASTICHAT_SNIPPETS_DIR}|g" \
     -e "s|__BACKEND_DOMAIN__|${BACKEND_DOMAIN}|g" \
     -e "s|__OPERATOR_DOMAIN__|${OPERATOR_DOMAIN}|g" \
     -e "s|__PLATFORM_DOMAIN__|${PLATFORM_DOMAIN}|g" \
@@ -78,6 +79,16 @@ render() {
     -e "s|__STATIC_HOST_PATH__|${STATIC_HOST_PATH}|g" \
     "$template"
 }
+
+# Media locations: chat attachments are private (signed URLs + X-Accel-Redirect). CHAT_ATTACHMENTS_PUBLIC=1 re-opens the
+# old public /media/attachments/ URLs as a TEMPORARY compatibility measure; the default (0) keeps them closed.
+render "$REPO_ROOT/deploy/nginx/snippets/media-locations.conf.template" > "$RASTICHAT_SNIPPETS_DIR/media-locations.conf"
+if [ "${CHAT_ATTACHMENTS_PUBLIC:-0}" = "1" ]; then
+  render "$REPO_ROOT/deploy/nginx/snippets/chat-media-open.conf.template" > "$RASTICHAT_SNIPPETS_DIR/chat-media-open.conf"
+  echo "WARNING: CHAT_ATTACHMENTS_PUBLIC=1 — chat attachments are readable by file name again (temporary compatibility)." >&2
+else
+  echo "# chat attachments are private (CHAT_ATTACHMENTS_PUBLIC is not 1)" > "$RASTICHAT_SNIPPETS_DIR/chat-media-open.conf"
+fi
 
 # Installs the certificate-free bootstrap config for $domain if (and only
 # if) no certificate exists for it yet — a domain that already has one

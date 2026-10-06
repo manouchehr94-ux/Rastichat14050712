@@ -9,6 +9,7 @@ from conversations.views import (
     WidgetBrandingView, OperationalSummaryView,
 )
 from conversations.ws_ticket_views import DashboardWsTicketView, WidgetWsTicketView
+from conversations.attachment_views import AttachmentDownloadView, AttachmentRefreshView
 from catalog.views import ProductViewSet
 from customer_context.views import (
     TagViewSet, ConversationTagsView, ConversationNotesView, CustomerContextView,
@@ -57,6 +58,9 @@ urlpatterns = [
     path('widget/init/', include('visitors.urls')),
     path('widget/session/', include((session_urlpatterns, 'visitors-session'))),
     path('widget/start/', StartCustomerChatView.as_view(), name='widget-start'),
+    path('attachments/<uuid:message_id>/', AttachmentDownloadView.as_view(), name='attachment-download'),
+    path('attachments/<uuid:message_id>/refresh/', AttachmentRefreshView.as_view(), name='attachment-refresh'),
+    path('widget/attachments/<uuid:message_id>/refresh/', AttachmentRefreshView.as_view(), name='widget-attachment-refresh'),  # under /widget/ so the project-aware CORS applies
     path('widget/ws-ticket/', WidgetWsTicketView.as_view(), name='widget-ws-ticket'),
     path('ws/ticket/', DashboardWsTicketView.as_view(), name='ws-ticket'),
     # These three must be resolved BEFORE the router include below: the

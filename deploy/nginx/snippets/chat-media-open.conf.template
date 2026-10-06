@@ -1,0 +1,9 @@
+# TEMPORARY COMPATIBILITY (CHAT_ATTACHMENTS_PUBLIC=1): chat attachments readable by file name again, exactly as before P1-6.
+# Use it only while already-open pages or cached widget bundles that hold old /media/attachments/ URLs drain, then re-run
+# scripts/nginx/install-sites.sh with CHAT_ATTACHMENTS_PUBLIC=0 (the default). Signed URLs work regardless of this switch.
+location ^~ /media/attachments/ {
+    alias __MEDIA_HOST_PATH__/attachments/;
+    add_header Cache-Control "private, max-age=3600";
+    add_header Referrer-Policy "no-referrer" always;
+    add_header X-Content-Type-Options "nosniff" always;
+}
