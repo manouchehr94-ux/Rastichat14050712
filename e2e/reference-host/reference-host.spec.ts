@@ -4,6 +4,8 @@ import { test, expect, Browser, Page } from '@playwright/test';
 //   host provisions tenants -> widget config -> identity bootstrap -> small launcher -> optional pre-chat ->
 //   customer message -> operator inbox (staff SSO, no second login) -> operator reply -> customer realtime reply.
 const HOST = process.env.HOST_URL || 'http://localhost:4000';
+// where the operator dashboard lives: localhost:3000 on the local stack, operator-stg.example.test on the sandbox staging stack
+const DASH = (process.env.OPERATOR_HOST || 'localhost:3000').replace(/\./g, '\\.');
 const uniq = (label: string) => `${label} ${Date.now()}-${Math.floor(Math.random() * 10000)}`;
 
 async function operatorViaHostSso(browser: Browser, staffUser: string) {
@@ -11,7 +13,7 @@ async function operatorViaHostSso(browser: Browser, staffUser: string) {
   const page = await ctx.newPage();
   await page.goto(`${HOST}/login?as=${staffUser}`);
   await page.goto(`${HOST}/staff/chat`);            // host -> dashboard /sso#assertion=…  (no password typed anywhere)
-  await page.waitForURL(/localhost:3000\/admin\/?$/);
+  await page.waitForURL(new RegExp(`${DASH}/admin/?$`));
   expect(page.url()).not.toContain('assertion');    // the credential was removed from the address bar
   return { ctx, page };
 }

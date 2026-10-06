@@ -7,6 +7,9 @@ import { readFileSync } from 'node:fs';
 //   -> merchant<->platform support -> platform-owner-initiated message to a store; isolation / gating / revocation.
 const seed = JSON.parse(readFileSync(process.env.SEED_FILE!, 'utf8'));
 const S = seed.stores as Record<string, { public_id: string; name: string; storefront: string; admin: string }>;
+const OPERATOR_HOST = process.env.OPERATOR_HOST || 'localhost:3000';     // sandbox staging: operator-stg.example.test
+const PLATFORM_HOST = process.env.PLATFORM_HOST || 'localhost:3001';     // sandbox staging: platform-stg.example.test
+const rx = (host: string, path: string) => new RegExp(`${host.replace(/\./g, '\\.')}${path}`);
 const uniq = (label: string) => `${label} ${Date.now()}-${Math.floor(Math.random() * 10000)}`;
 
 async function loggedIn(browser: Browser, username: string, origin: string): Promise<{ ctx: BrowserContext; page: Page }> {
@@ -75,7 +78,7 @@ test.describe.serial('RastiSi x RastiChat', () => {
 
     const { ctx: adminCtx, page: admin } = await loggedIn(browser, 'admin_a', S.sa.admin);
     await admin.goto(`${S.sa.admin}/admin-portal/chat/customers/`);
-    await admin.waitForURL(/localhost:3000\/admin\/?$/);
+    await admin.waitForURL(rx(OPERATOR_HOST, '/admin/?$'));
     expect(admin.url()).not.toContain('assertion');                            // credential removed from the address bar
     await openInbox(admin, message);
     await expect(admin.getByText('✓ هویت تأییدشده')).toHaveCount(0);            // guest is never "verified"
@@ -100,14 +103,14 @@ test.describe.serial('RastiSi x RastiChat', () => {
 
     const a = await loggedIn(browser, 'owner1', S.sa.admin);
     await a.page.goto(`${S.sa.admin}/admin-portal/chat/customers/`);
-    await a.page.waitForURL(/localhost:3000\/admin\/?$/);
+    await a.page.waitForURL(rx(OPERATOR_HOST, '/admin/?$'));
     await openInbox(a.page, message);
     await expect(a.page.getByText('✓ هویت تأییدشده').first()).toBeVisible();   // verified by the host's assertion
 
     // the same multi-store owner entering through store B's admin host gets store B's inbox: nothing from A
     const b = await loggedIn(browser, 'owner1', S.sb.admin);
     await b.page.goto(`${S.sb.admin}/admin-portal/chat/customers/`);
-    await b.page.waitForURL(/localhost:3000\/admin\/?$/);
+    await b.page.waitForURL(rx(OPERATOR_HOST, '/admin/?$'));
     await b.page.waitForLoadState('networkidle');
     await expect(b.page.getByText(message, { exact: true })).toHaveCount(0);
     await a.ctx.close(); await b.ctx.close(); await ctx.close();
@@ -116,12 +119,12 @@ test.describe.serial('RastiSi x RastiChat', () => {
   test('isolation — a member of another store, and an order manager on support, are refused', async ({ browser }) => {
     const other = await loggedIn(browser, 'owner_b', S.sa.admin);                // owner of B has no membership on A
     const r = await other.page.goto(`${S.sa.admin}/admin-portal/chat/customers/`);
-    expect(r!.url()).not.toContain('localhost:3000');
+    expect(r!.url()).not.toContain(OPERATOR_HOST);
     await other.ctx.close();
 
     const mgr = await loggedIn(browser, 'manager_a', S.sa.admin);                // order manager: customer chat yes, platform support no
     await mgr.page.goto(`${S.sa.admin}/admin-portal/chat/customers/`);
-    await mgr.page.waitForURL(/localhost:3000\/admin\/?$/);
+    await mgr.page.waitForURL(rx(OPERATOR_HOST, '/admin/?$'));
     const r2 = await mgr.page.goto(`${S.sa.admin}/admin-portal/chat/support/`);
     expect(r2!.status()).toBe(403);
     await mgr.ctx.close();
@@ -130,7 +133,7 @@ test.describe.serial('RastiSi x RastiChat', () => {
   test('path 2 — merchant opens a support thread to the platform team; platform owner answers in the platform inbox', async ({ browser }) => {
     const merchant = await loggedIn(browser, 'owner1', S.sa.admin);
     await merchant.page.goto(`${S.sa.admin}/admin-portal/chat/support/`);
-    await merchant.page.waitForURL(/localhost:3000\/admin\/support\/?$/);
+    await merchant.page.waitForURL(rx(OPERATOR_HOST, '/admin/support/?$'));
     const subject = uniq('مشکل پرداخت');
     const body = uniq('درگاه پرداخت خطا می‌دهد');
     await merchant.page.getByRole('button', { name: 'تیکت جدید' }).click();
@@ -143,7 +146,7 @@ test.describe.serial('RastiSi x RastiChat', () => {
 
     const root = await loggedIn(browser, 'platform_root', seed.platform);
     await root.page.goto(`${seed.platform}/chat/inbox/`);
-    await root.page.waitForURL(/localhost:3001\/platform\/inbox\/?$/);
+    await root.page.waitForURL(rx(PLATFORM_HOST, '/platform/inbox/?$'));
     expect(root.page.url()).not.toContain('assertion');
     await expect(async () => { await root.page.reload(); await root.page.getByText(S.sa.name).first().waitFor({ timeout: 4000 }); }).toPass({ timeout: 30000 });
     await root.page.getByText(S.sa.name).first().click();
@@ -168,14 +171,14 @@ test.describe.serial('RastiSi x RastiChat', () => {
 
     const owner = await loggedIn(browser, 'owner_b', S.sb.admin);
     await owner.page.goto(`${S.sb.admin}/admin-portal/chat/support/`);
-    await owner.page.waitForURL(/localhost:3000\/admin\/support\/?$/);
+    await owner.page.waitForURL(rx(OPERATOR_HOST, '/admin/support/?$'));
     await expect(async () => { await owner.page.reload(); await owner.page.getByText(subject).first().waitFor({ timeout: 4000 }); }).toPass({ timeout: 30000 });
     await owner.page.getByText(subject).first().click();
     await expect(owner.page.getByText(text).first()).toBeVisible({ timeout: 15000 });
     // store A's merchant must not see the message sent to B
     const a = await loggedIn(browser, 'admin_a', S.sa.admin);
     await a.page.goto(`${S.sa.admin}/admin-portal/chat/support/`);
-    await a.page.waitForURL(/localhost:3000\/admin\/support\/?$/);
+    await a.page.waitForURL(rx(OPERATOR_HOST, '/admin/support/?$'));
     await a.page.waitForLoadState('networkidle');
     await expect(a.page.getByText(subject)).toHaveCount(0);
     await root.ctx.close(); await owner.ctx.close(); await a.ctx.close();
@@ -190,7 +193,7 @@ membership_service.revoke_membership(m, actor=None)
 `);
     const mgr = await loggedIn(browser, 'manager_a', S.sa.admin);
     const r = await mgr.page.goto(`${S.sa.admin}/admin-portal/chat/customers/`);
-    expect(r!.url()).not.toContain('localhost:3000/admin');
+    expect(r!.url()).not.toContain(`${OPERATOR_HOST}/admin`);
     await mgr.ctx.close();
 
     const { ctx, page } = await loggedIn(browser, 'platform_root', seed.platform);
