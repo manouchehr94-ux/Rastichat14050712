@@ -163,6 +163,11 @@ single-use `jti`. No request-binding claims (the browser relays it). Claims:
   `(integration, sub)`. An existing RastiChat user is **never** linked, matched by email, or modified.
 * The membership for the asserted tenant (or the integration's platform for `platform_staff`) is created/updated
   idempotently and recorded as integration-owned. Roles are re-asserted on every exchange.
+* **A staff `sub` is global to the integration, and so is its RastiChat account.** If one person has staff access to
+  several tenants, that account holds a membership in each and the dashboard shows the union of those inboxes. Hosts
+  that want a session entered through tenant B to be unable to see tenant A (the usual choice for merchant-facing
+  products) should namespace the staff `sub` per tenant (e.g. `u42.<tenant id>`): each (person, tenant) then has its own
+  isolated account. Remember to use the same ids with `members/{user}/` and `users/{user}/disable/`.
 * The access token is a normal dashboard JWT with a short lifetime (`INTEGRATION_STAFF_SESSION_MINUTES`, default 30) and
   **no refresh token**: the host's next assertion is the renewal. Deliver the assertion to a dashboard page in the
   **URL fragment or a POST body — never the query string**.
