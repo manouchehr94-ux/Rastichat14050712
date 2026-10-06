@@ -48,6 +48,26 @@ curl -fsS -H "X-Monitoring-Token: $MONITORING_TOKEN" \
   (default 26h). Run `scripts/staging/backup.sh` and check the cron/timer
   that should be doing this automatically.
 
+## Integration event counters
+
+`/health/monitoring/` also returns `events_last_24h`: counters for the integration platform (and WebSocket authentication),
+bucketed per UTC day in Redis for 14 days. Names are `<event>` or `<event>:<label>`:
+
+| Counter | Meaning / what to do |
+|---|---|
+| `token_refused:<code>` | a host token was refused (`replay`, `invalid_token`, `token_expired`, `binding_mismatch`…). A burst of `replay`/`invalid_*` = attack or clock skew between host and RastiChat; check NTP first |
+| `scope_denied` | a valid key tried something outside its scopes — a host misconfiguration or a stolen key probing |
+| `cross_tenant_denied:<code>` | a request tried to use a tenant it does not own (`tenant_mismatch`, `tenant_unavailable`…). Any non-trivial count deserves a look at the integration |
+| `rate_limited` | an integration or exchange throttle fired |
+| `identity_exchange:customer` / `:staff_*` | successful SSO exchanges (baseline for the refusals above) |
+| `audit:<action>` | every audited operation (tenant provisioned/updated/status changed, role mapped, identity created/disabled, guest upgraded, context updated…) |
+| `conversation_created:customer`, `prechat_submitted`, `support_thread:started|resumed` | product activity |
+| `ws_ticket_issued:<kind>`, `ws_auth:ok|refused` | realtime connects/reconnects; `refused` spikes = expired/replayed tickets or revocation |
+| `widget_config:served` | widget initialisations |
+
+The same events are written one per line to the application log as
+`rastichat_event event=<name> label=<code> k=v …` (never a credential: credential-named fields are dropped).
+
 ## Container-level status
 
 ```bash

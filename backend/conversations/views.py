@@ -8,6 +8,7 @@ from rest_framework.views import APIView
 from rest_framework.decorators import action
 from rest_framework.parsers import MultiPartParser, FormParser
 from rest_framework.throttling import ScopedRateThrottle
+from common import observability
 from .models import Conversation, Message, MessageReceipt, Assignment, PriorityChange
 from .serializers import ConversationSerializer, MessageSerializer, AssignmentSerializer
 from .media_validation import validate_and_normalize_upload, UploadValidationError
@@ -448,6 +449,8 @@ class StartCustomerChatView(APIView):
                 from .models import PreChatSubmission
                 if answers:
                     PreChatSubmission.objects.create(conversation=conv, answers=answers)
+                    observability.emit('prechat_submitted', answers=len(answers))
+                observability.emit('conversation_created', label='customer')
                 # Routing/SLA must be persisted BEFORE CONVERSATION_CREATED is
                 # published — an automation condition on conversation.queue_id,
                 # operational.queue_has_capacity, or conversation.sla_state must

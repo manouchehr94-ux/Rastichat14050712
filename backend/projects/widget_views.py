@@ -9,6 +9,7 @@ from common.permissions import require_workspace_admin
 from common.throttles import StaffWriteThrottle
 from visitors.sessions import enforce_project_origin
 
+from common import observability
 from .models import Project, ProjectWidgetConfig
 from .widget_config import ConfigError, public_config, resolve_config, validate_config
 
@@ -35,6 +36,7 @@ class WidgetConfigView(APIView):
         if project is None:
             return Response({'error': 'Unknown project.', 'code': 'invalid_project'}, status=status.HTTP_404_NOT_FOUND)
         enforce_project_origin(request, project, establishing=False)
+        observability.emit('widget_config', label='served')
         response = Response(public_config(project))
         response['Cache-Control'] = 'public, max-age=30'
         return response

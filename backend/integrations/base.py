@@ -1,14 +1,19 @@
 """Shared response behaviour of every Integration Contract endpoint: the v1 error envelope and contract headers."""
+import logging
+
 from rest_framework import status
 from rest_framework.exceptions import APIException, ValidationError
 from rest_framework.response import Response
 
 from common.middleware import get_current_request_id
 
+from common import observability
 from .errors import IntegrationAPIError
 
 CONTRACT_HEADER = 'X-RastiChat-Contract'
 CONTRACT_VERSION = 'integration-v1'
+# a request tried to cross a tenant boundary (or use a tenant it does not own) and was refused
+CROSS_TENANT_CODES = frozenset({'tenant_mismatch', 'tenant_unavailable', 'tenant_not_found', 'origin_mismatch'})
 
 
 class ContractEnvelopeMixin:
@@ -21,6 +26,9 @@ class ContractEnvelopeMixin:
     def handle_exception(self, exc):
         # Any error leaves in the v1 envelope; unexpected exceptions keep DRF/Django's own 500 handling.
         if isinstance(exc, IntegrationAPIError):
+            observability.emit('api_error', label=exc.error_code, status=exc.status_code)
+            if exc.error_code in CROSS_TENANT_CODES:
+                observability.emit('cross_tenant_denied', label=exc.error_code)
             return self._envelope(exc.status_code, exc.error_code, exc.message, exc.details)
         if isinstance(exc, ValidationError):
             return self._envelope(status.HTTP_400_BAD_REQUEST, 'validation_error', 'Invalid request.', exc.detail)
@@ -31,6 +39,8 @@ class ContractEnvelopeMixin:
                 429: 'rate_limited', 415: 'unsupported_media_type'}.get(exc.status_code, 'error')
             message = detail.get('error') if isinstance(detail, dict) and detail.get('error') else str(detail)
             response = self._envelope(exc.status_code, code, message)
+            if exc.status_code == 429:
+                observability.emit('rate_limited', level=logging.WARNING, scope=getattr(self, 'throttle_scope', 'integration_api'))
             if exc.status_code == 429 and getattr(exc, 'wait', None):
                 response['Retry-After'] = str(int(exc.wait) + 1)
             return response

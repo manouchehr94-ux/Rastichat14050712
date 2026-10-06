@@ -179,6 +179,14 @@ def _backup_freshness():
     }
 
 
+def _event_counters():
+    from common import observability
+    try:
+        return observability.counters(days=1)
+    except Exception:  # noqa: BLE001 - monitoring must still answer when Redis is down
+        return {'error': 'unavailable'}
+
+
 class MonitoringView(APIView):
     """Operational visibility — deliberately separate from Liveness/
     Readiness (which gate traffic routing): a stale backup or a scheduler
@@ -203,6 +211,8 @@ class MonitoringView(APIView):
             'schedulers': _scheduler_status(),
             'disk': _disk_usage(),
             'backup': _backup_freshness(),
+            # structured-event counters (integration bootstrap, SSO refusals, replay, pre-chat, WS auth, cross-tenant denials, ...)
+            'events_last_24h': _event_counters(),
         })
 
 

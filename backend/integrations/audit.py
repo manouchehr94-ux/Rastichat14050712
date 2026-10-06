@@ -3,7 +3,10 @@
 Actor is None (the caller is an integration, not a RastiChat user); the integration and key are recorded in the
 metadata. Metadata never contains tokens, keys, request bodies or PII — identifiers and field *names* only.
 """
+from django.db import transaction
+
 from audit.models import AuditEvent
+from common import observability
 
 _FORBIDDEN_META_KEYS = {'token', 'secret', 'password', 'private_key', 'authorization'}
 
@@ -14,6 +17,9 @@ def record(action, *, integration=None, key=None, target_type='integration', tar
         clean['integration'] = integration.slug
     if key is not None:
         clean['kid'] = key.kid
-    return AuditEvent.objects.create(
+    event = AuditEvent.objects.create(
         actor=actor, action=f'integration.{action}', target_type=target_type, target_id=str(target_id), metadata=clean,
     )
+    integration_slug = integration.slug if integration is not None else '-'
+    transaction.on_commit(lambda: observability.emit('audit', label=action, integration=integration_slug))
+    return event

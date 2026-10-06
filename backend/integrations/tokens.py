@@ -19,6 +19,7 @@ import jwt
 from django.conf import settings
 from django.utils import timezone
 
+from common import observability
 from . import redis_store
 from .keys import load_public_key
 from .models import Integration, IntegrationKey
@@ -64,6 +65,7 @@ def _refuse(event, code, message, status=401, **extra):
         'integration_token_refused event=%s code=%s integration=%s kid=%s',
         event, code, extra.get('integration', '-'), extra.get('kid', '-'),
     )
+    observability.emit('token_refused', level=logging.WARNING, label=code, reason=event, integration=extra.get('integration', '-'))
     raise TokenError(code, message, status)
 
 

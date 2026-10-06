@@ -14,6 +14,7 @@ from rest_framework import permissions
 from rest_framework.authentication import BaseAuthentication, get_authorization_header
 from rest_framework.throttling import BaseThrottle, SimpleRateThrottle
 
+from common import observability
 from . import redis_store, tokens
 from .errors import IntegrationAPIError
 
@@ -84,6 +85,7 @@ class IntegrationAuthentication(BaseAuthentication):
         ):
             logger.warning('integration_token_refused event=binding_mismatch code=binding_mismatch integration=%s kid=-',
                            claims.get('iss', '-'))
+            observability.emit('token_refused', level=logging.WARNING, label='binding_mismatch', reason='binding_mismatch')
             raise tokens.TokenError('binding_mismatch', 'Token is not bound to this request (htm/htu/bh).', 401)
 
 
@@ -101,6 +103,7 @@ class HasIntegrationScope(permissions.BasePermission):
             return False
         if not required <= principal.scopes:
             logger.warning('integration_scope_denied integration=%s kid=%s', principal.integration.slug, principal.key.kid)
+            observability.emit('scope_denied', integration=principal.integration.slug)
             raise IntegrationAPIError('scope_denied', 'The signing key is not permitted to do this.', 403)
         return True
 

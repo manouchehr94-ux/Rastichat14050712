@@ -27,6 +27,8 @@ from django.conf import settings
 
 import redis as redis_lib
 
+from common import observability
+
 KIND_DASHBOARD_CHAT = 'dashboard_chat'
 KIND_SUPPORT = 'support'
 KIND_NOTIFICATIONS = 'notifications'
@@ -66,6 +68,12 @@ def consume_ticket_sync(ticket, *, kind, scope_id=None):
     """Atomically take the ticket. Returns its payload iff it existed (unexpired,
     unused) AND matches `kind` and `scope_id`; otherwise None. The ticket is destroyed
     in every case in which it existed, so a mismatching replay burns it."""
+    payload = _consume(ticket, kind=kind, scope_id=scope_id)
+    observability.emit('ws_auth', label='ok' if payload else 'refused', kind=kind)
+    return payload
+
+
+def _consume(ticket, *, kind, scope_id=None):
     if not ticket or not isinstance(ticket, str) or len(ticket) > 200:
         return None
     pipe = _get_redis().pipeline(transaction=True)

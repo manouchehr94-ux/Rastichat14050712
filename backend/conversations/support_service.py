@@ -23,6 +23,7 @@ from notifications.services import notify
 from platforms.models import PlatformMembership
 from workspaces.models import WorkspaceMembership
 
+from common import observability
 from .models import Conversation, Message
 
 Side = Conversation.Side
@@ -161,6 +162,7 @@ def start_thread(workspace, user, side, *, subject, subject_key, message, client
     # without a client_message_id every call is a new message; pass one (or an Idempotency-Key at the integration API) for retry safety
     msg, _ = post_message(conv, user, side, message, client_message_id or f'start_{uuid.uuid4().hex}')
     conv.refresh_from_db()
+    observability.emit('support_thread', label='started' if created else 'resumed', side=side)
     return conv, created, msg
 
 
