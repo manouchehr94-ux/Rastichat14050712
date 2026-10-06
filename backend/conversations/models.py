@@ -143,3 +143,16 @@ class Assignment(models.Model):
 
     class Meta:
         ordering = ['-created_at']
+
+
+class PreChatSubmission(models.Model):
+    """The answers a visitor gave to the project's pre-chat form when starting this conversation.
+
+    Structured, not columns: `answers` is `[{key, label, type, value, source}]` with the question labels snapshotted at
+    submit time (so editing the form later never rewrites history). `source` is `visitor` for typed answers and
+    `client` for hidden context supplied by the embedding page (never trusted as identity). Operator-side data.
+    """
+    conversation = models.OneToOneField(Conversation, on_delete=models.CASCADE, related_name='pre_chat')
+    answers = models.JSONField(default=list)
+    config_version = models.PositiveSmallIntegerField(default=1)
+    created_at = models.DateTimeField(auto_now_add=True)

@@ -30,3 +30,12 @@ class Project(models.Model):
 
     def __str__(self):
         return self.name
+
+
+class ProjectWidgetConfig(models.Model):
+    """Validated, versioned widget configuration for one project (see projects/widget_config.py). Stored as a partial
+    document; absent keys fall back to the defaults, so a project without a row behaves exactly as before."""
+    project = models.OneToOneField(Project, on_delete=models.CASCADE, related_name='widget_config')
+    config = models.JSONField(default=dict, blank=True)
+    updated_at = models.DateTimeField(auto_now=True)
+    updated_by = models.ForeignKey('accounts.User', on_delete=models.SET_NULL, null=True, blank=True, related_name='+')

@@ -175,6 +175,17 @@ def _op_assignee_is_team_member(ctx):
     return TeamMembership.objects.filter(team_id=ctx.conv.team_id, user_id=ctx.conv.assigned_to_id, is_active=True).exists()
 
 
+def _pre_chat_answers(ctx):
+    """`{question key: answer}` of the conversation's pre-chat submission (hidden/client-supplied context included —
+    conditions must treat it as untrusted input, like message content)."""
+    if not ctx.conv:
+        return _MISSING
+    submission = getattr(ctx.conv, 'pre_chat', None)
+    if submission is None:
+        return {}
+    return {a['key']: a['value'] for a in submission.answers if isinstance(a, dict) and 'key' in a}
+
+
 FIELD_RESOLVERS = {
     'conversation.type': _conv_field('type'),
     'conversation.status': _conv_field('status'),
@@ -196,6 +207,7 @@ FIELD_RESOLVERS = {
     'customer.total_spending': _customer_total_spending,
     'customer.location': _customer_location,
     'customer.metadata': lambda ctx: (ctx.profile.metadata if ctx.profile else {}) or {},
+    'conversation.pre_chat': lambda ctx: _pre_chat_answers(ctx),
     'message.type': lambda ctx: ctx.event.payload.get('message_type', _MISSING),
     'message.content': lambda ctx: ctx.event.payload.get('content', _MISSING),
     'message.sender_type': lambda ctx: ctx.event.payload.get('sender_type', _MISSING),
@@ -277,7 +289,7 @@ def resolve_field(ctx, field, path=None):
     if resolver is None:
         return _MISSING
     value = resolver(ctx)
-    if field == 'customer.metadata':
+    if field in ('customer.metadata', 'conversation.pre_chat'):
         if value is _MISSING or not isinstance(value, dict):
             return _MISSING
         return value.get(path, _MISSING)

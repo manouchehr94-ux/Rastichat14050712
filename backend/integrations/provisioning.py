@@ -14,7 +14,7 @@ from django.utils import timezone
 
 from audit.models import AuditEvent  # noqa: F401  (re-exported for tests that inspect the trail)
 from projects.domains import parse_allowed_domains, clear_entries_cache
-from projects.models import Project
+from projects.models import Project, ProjectWidgetConfig
 from workspaces.models import Workspace
 
 from . import audit
@@ -60,6 +60,13 @@ def _create(integration, key, external_tenant_id, data):
         name=display_name, workspace=workspace,
         logo_url=branding.get('logo_url', ''), subtitle=branding.get('subtitle', ''),
     )
+    # Provisioned tenants start conversations on the first message (no empty conversations in the inbox) unless the
+    # seeded widget document says otherwise; projects created by hand keep the original on-load behaviour.
+    widget_defaults = (data.get('defaults') or {}).get('widget') or {}
+    seeded = {'version': 1, 'behavior': {'start_mode': 'on_first_message'}}
+    seeded.update({k: v for k, v in widget_defaults.items() if k != 'behavior'})
+    seeded['behavior'] = {**seeded['behavior'], **widget_defaults.get('behavior', {})}
+    ProjectWidgetConfig.objects.create(project=project, config=seeded)
     status = _STATUS_IN[data['status']] if data.get('status') else Status.ACTIVE
     mapping = IntegrationTenantMapping.objects.create(
         integration=integration, external_tenant_id=external_tenant_id, workspace=workspace, project=project,

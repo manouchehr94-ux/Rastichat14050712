@@ -154,4 +154,8 @@ class CustomerContextView(APIView):
             'score': score,
             'tags': TagSerializer(tags, many=True).data,
             'recent_orders': CustomerOrderSerializer(orders[:10], many=True).data,
+            # structured answers the visitor gave before the conversation started (empty list when none)
+            'pre_chat': list(getattr(getattr(conv, 'pre_chat', None), 'answers', None) or []),
+            # True only for customers asserted by a trusted host backend (never for a guest or a browser-claimed id)
+            'identity_verified': hasattr(visitor, 'external_identity'),
         })

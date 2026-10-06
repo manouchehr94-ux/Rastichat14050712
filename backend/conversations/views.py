@@ -401,6 +401,15 @@ class CustomerConversationViewSet(
         return Response(data, status=201)
 
 class StartCustomerChatView(APIView):
+    """`POST /api/v1/widget/start/` — find or create the visitor's open conversation.
+
+    Additive options (the original request/response shape is unchanged):
+    * `create: false` — only look: returns the existing open conversation, or `{"id": null}` WITHOUT creating one
+      (so a widget can restore history on page load without filling the inbox with empty conversations);
+    * `pre_chat: {key: answer}` — the answers to the project's pre-chat form. Validated against the project's CURRENT
+      configuration (required/typed/choices) before anything is created; stored with the conversation (and exposed to
+      routing/automations as `conversation.pre_chat`) only when this call creates the conversation.
+    """
     permission_classes = []
     throttle_classes = [ScopedRateThrottle]
     throttle_scope = 'widget_start'
@@ -410,13 +419,33 @@ class StartCustomerChatView(APIView):
         session = get_request_session(request)
         if session is None:
             return Response({'error': 'Invalid session', 'code': 'session_invalid'}, status=status.HTTP_401_UNAUTHORIZED)
+        visitor = session.visitor
+        workspace = visitor.project.workspace
+        from projects.widget_config import guests_allowed
+        if not guests_allowed(visitor.project) and not hasattr(visitor, 'external_identity'):
+            return Response({'error': 'This chat requires a signed-in customer.', 'code': 'identity_required'},
+                            status=status.HTTP_403_FORBIDDEN)
+        lookup = dict(visitor=visitor, workspace=workspace, type=Conversation.Type.CUSTOMER, status=Conversation.Status.OPEN)
+        peek_only = request.data.get('create') is False
+        answers = None
+        if not peek_only and not Conversation.objects.filter(**lookup).exists():
+            answers = self._validated_pre_chat(visitor.project, request.data.get('pre_chat'))
+            if isinstance(answers, Response):
+                return answers
+        if peek_only:
+            existing = Conversation.objects.filter(**lookup).first()
+            if existing is None:
+                return Response({'id': None}, status=200)
         with transaction.atomic():
-            conv, created = Conversation.objects.get_or_create(visitor=session.visitor, workspace=session.visitor.project.workspace, type=Conversation.Type.CUSTOMER, status=Conversation.Status.OPEN)
+            conv, created = Conversation.objects.get_or_create(**lookup)
             if not created and conv.status == 'CLOSED': conv.status = 'OPEN'; conv.save()
             if created:
                 from queues.services import route_new_conversation
                 from sla.services import apply_sla
                 from automations.events import publish_event
+                from .models import PreChatSubmission
+                if answers:
+                    PreChatSubmission.objects.create(conversation=conv, answers=answers)
                 # Routing/SLA must be persisted BEFORE CONVERSATION_CREATED is
                 # published — an automation condition on conversation.queue_id,
                 # operational.queue_has_capacity, or conversation.sla_state must
@@ -426,7 +455,8 @@ class StartCustomerChatView(APIView):
                 # whole sequence in one atomic block also means a failure here
                 # (e.g. routing/SLA raising) rolls back the conversation creation
                 # too, rather than leaving a misleading published event with no
-                # backing conversation state.
+                # backing conversation state. The pre-chat answers are saved first so
+                # rules (routing by topic, ...) see them on CONVERSATION_CREATED.
                 conv = route_new_conversation(conv)
                 apply_sla(conv)
                 publish_event('CONVERSATION_CREATED', conv.workspace_id, conversation_id=conv.id, actor_type='SYSTEM')
@@ -437,6 +467,19 @@ class StartCustomerChatView(APIView):
         data['session_expires_at'] = session.expires_at
         data['rotate_session'] = rotation_due(session)
         return Response(data, status=200)
+
+    @staticmethod
+    def _validated_pre_chat(project, raw):
+        """None when the project asks no questions; the answer snapshot when valid; a 400 Response otherwise."""
+        from projects.widget_config import ConfigError, resolve_config, validate_answers
+        config = resolve_config(project)
+        if not config['pre_chat']['enabled']:
+            return None
+        try:
+            return validate_answers(config, raw if raw is not None else {})
+        except ConfigError as exc:
+            return Response({'error': 'Invalid pre-chat answers.', 'code': 'pre_chat_invalid', 'errors': exc.errors},
+                            status=status.HTTP_400_BAD_REQUEST)
 
 class MessageListView(APIView):
     permission_classes = [IsWorkspaceOperator]

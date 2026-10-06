@@ -531,6 +531,7 @@ REST_FRAMEWORK = {
         'support_write': None if TESTING else os.environ.get('SUPPORT_WRITE_THROTTLE_RATE', '60/min'),
         'identity_exchange': None if TESTING else os.environ.get('IDENTITY_EXCHANGE_THROTTLE_RATE', '60/min'),
         'integration_api': None if TESTING else os.environ.get('INTEGRATION_API_THROTTLE_RATE', '300/min'),
+        'widget_config': None if TESTING else os.environ.get('WIDGET_CONFIG_THROTTLE_RATE', '120/min'),
         'widget_init': None if TESTING else os.environ.get('WIDGET_INIT_THROTTLE_RATE', '30/min'),
         'ws_ticket': None if TESTING else os.environ.get('WS_TICKET_THROTTLE_RATE', '120/min'),
         'widget_session': None if TESTING else os.environ.get('WIDGET_SESSION_THROTTLE_RATE', '30/min'),

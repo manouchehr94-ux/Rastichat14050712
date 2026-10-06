@@ -28,6 +28,11 @@ class InitVisitorView(APIView):
             return Response({'project_key': ['Invalid or inactive project key.']}, status=status.HTTP_400_BAD_REQUEST)
         # session creation is the one call that carries no credential yet, so the Origin policy is strictest here
         enforce_project_origin(request, project, establishing=True)
+        from projects.widget_config import guests_allowed
+        if not guests_allowed(project):
+            # authenticated-only project: a session can only be obtained through a host-signed assertion
+            return Response({'error': 'This chat requires a signed-in customer.', 'code': 'identity_required'},
+                            status=status.HTTP_403_FORBIDDEN)
         external_id = serializer.validated_data.get('external_id')
         attrs = {
             'name': serializer.validated_data.get('name'),

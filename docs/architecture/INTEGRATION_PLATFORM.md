@@ -112,7 +112,7 @@ uses the existing scheduler-worker pattern.)
 |---|---|---|
 | Integration, keys, mapping, signed-request auth, replay protection, scopes, provisioning, lifecycle, audit, throttling, CLI | A | **Implemented** (this PR) |
 | Identity assertions, customer/staff/platform bootstrap, guest upgrade, membership/identity deprovisioning | B | **Implemented** (backend; dashboard SSO landing page: see PR) |
-| Launcher config, pre-chat schema/persistence, widget config API, widget + dashboard UI | C | Specified |
+| Launcher config, pre-chat schema/persistence, widget config API, widget (launcher, lazy start, pre-chat form, bootstrap), dashboard settings + sidebar | C | **Implemented** |
 | Reference (non-RastiSi) host + generic E2E | D | Specified |
 | Platform-initiated conversations | E | Specified |
 | RastiSi adapter & UI flows | F, G | Specified |

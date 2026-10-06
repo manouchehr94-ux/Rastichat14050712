@@ -12,6 +12,7 @@ from conversations.views import (
 from conversations.ws_ticket_views import DashboardWsTicketView, WidgetWsTicketView
 from conversations.attachment_views import AttachmentDownloadView, AttachmentRefreshView
 from catalog.views import ProductViewSet
+from projects.widget_views import AdminProjectListView, ProjectWidgetConfigAdminView, WidgetConfigView
 from customer_context.views import (
     TagViewSet, ConversationTagsView, ConversationNotesView, CustomerContextView,
 )
@@ -61,6 +62,9 @@ urlpatterns = [
     path('widget/init/', include('visitors.urls')),
     path('widget/session/', include((session_urlpatterns, 'visitors-session'))),
     path('widget/start/', StartCustomerChatView.as_view(), name='widget-start'),
+    path('widget/config/', WidgetConfigView.as_view(), name='widget-config'),
+    path('projects/', AdminProjectListView.as_view(), name='admin-project-list'),
+    path('projects/<int:pk>/widget-config/', ProjectWidgetConfigAdminView.as_view(), name='project-widget-config'),
     path('attachments/<uuid:message_id>/', AttachmentDownloadView.as_view(), name='attachment-download'),
     path('attachments/<uuid:message_id>/refresh/', AttachmentRefreshView.as_view(), name='attachment-refresh'),
     path('widget/attachments/<uuid:message_id>/refresh/', AttachmentRefreshView.as_view(), name='widget-attachment-refresh'),  # under /widget/ so the project-aware CORS applies

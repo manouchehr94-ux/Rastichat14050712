@@ -18,6 +18,15 @@ class DefaultsSerializer(serializers.Serializer):
     """Values applied ONLY when the tenant is first created (seed-only). Later changes belong to RastiChat admins;
     an integration re-sending them does not overwrite manual configuration."""
     branding = BrandingDefaultsSerializer(required=False)
+    # a widget configuration document (launcher, pre-chat, identity policy, ...) — see projects/widget_config.py
+    widget = serializers.DictField(required=False)
+
+    def validate_widget(self, value):
+        from projects.widget_config import ConfigError, validate_config
+        try:
+            return validate_config(value)
+        except ConfigError as exc:
+            raise serializers.ValidationError(exc.errors)
 
 
 class _StrictMixin:

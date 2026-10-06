@@ -193,8 +193,8 @@ untouched even with identical ids. History (conversations, messages, attachments
 is a separate retention operation. Known limitation: conversations still *assigned* to a removed member keep that
 assignee until an admin reassigns them.
 
-## 9. Widget configuration & pre-chat  **[specified — PR C]**
-`GET /api/v1/widget/config/?project_key=<public key>` (public, Origin-checked) returns a versioned document:
+## 9. Widget configuration & pre-chat  **[implemented — PR C]**
+`GET /api/v1/widget/config/?project_key=<public key>` (public, Origin-checked) returns a versioned document (shape abridged; the normative schema is in `docs/widget/PRE_CHAT_CONFIGURATION.md`):
 ```json
 {"version": 1,
  "launcher": {"enabled": true, "mode": "icon|icon_text", "position": "bottom-right|bottom-left", "offset": {"x":16,"y":16},
@@ -207,9 +207,12 @@ assignee until an admin reassigns them.
 ```
 Field types: `text`, `textarea`, `email`, `phone`, `select`, `radio`, `checkbox`, `consent`, `hidden`. Validated
 server-side; answers are stored with the conversation as structured data (not columns) and are visible to the receiving
-operator, routing, automations and events. Modes: no questions / one question / structured form — pure configuration.
+operator, routing and automations (`conversation.pre_chat`) and — once webhooks land — events. Modes: no questions / one
+question / structured form — pure configuration. Full schema, limits and examples: `docs/widget/PRE_CHAT_CONFIGURATION.md`.
+An integration may seed it at provisioning with `defaults.widget` (applied once; see §6 ownership). Projects that
+never set a configuration keep the original widget behaviour.
 
-## 10. Widget & headless clients  **[specified — PR C/D]**
+## 10. Widget & headless clients  **[widget implemented — PR C; reference host & headless client — PR D]**
 * Widget: `RastiChat.init({project, bootstrap: async () => fetchAssertionFromMyBackend()})` — see `docs/widget/EMBEDDING.md`.
   The project key is public; identity only via `bootstrap`; no long-lived credential in markup.
 * Headless: the same REST + WebSocket protocol the widget uses (OpenAPI at `/api/schema/`), plus a small

@@ -171,6 +171,37 @@ describe('Operator dashboard — customer conversations page', () => {
     expect(markConversationRead).toHaveBeenCalledWith('c1');
   });
 
+  it('shows the visitor\'s pre-chat answers (hidden page context flagged as unverified) and the verified-identity badge', async () => {
+    vi.mocked(fetchCustomerContext).mockResolvedValue({
+      name: 'سارا محمدی', phone: '0912', location: '', customer_since: '2024-01-01T00:00:00Z',
+      order_count: 0, total_spent: '0', score: null, recent_orders: [], identity_verified: true,
+      pre_chat: [
+        { key: 'topic', label: 'موضوع', type: 'select', value: 'پرداخت', source: 'visitor' },
+        { key: 'agree', label: 'قوانین', type: 'consent', value: true, source: 'visitor' },
+        { key: 'page', label: 'صفحه', type: 'hidden', value: '/orders/17', source: 'client' },
+      ],
+    });
+    render(<DashboardPage />);
+    await waitFor(() => expect(screen.getByText('سارا محمدی')).toBeDefined());
+    await selectConversation('سارا محمدی');
+    const panels = await screen.findAllByTestId('pre-chat-answers');
+    expect(panels[0].textContent).toContain('موضوع');
+    expect(panels[0].textContent).toContain('پرداخت');
+    expect(panels[0].textContent).toContain('بله');
+    expect(panels[0].textContent).toContain('/orders/17');
+    expect(panels[0].textContent).toContain('تأییدنشده');
+    expect((await screen.findAllByText('✓ هویت تأییدشده')).length).toBeGreaterThan(0);
+  });
+
+  it('shows neither pre-chat answers nor the verified badge for a plain guest conversation', async () => {
+    render(<DashboardPage />);
+    await waitFor(() => expect(screen.getByText('سارا محمدی')).toBeDefined());
+    await selectConversation('سارا محمدی');
+    await waitFor(() => expect(fetchCustomerContext).toHaveBeenCalled());
+    expect(screen.queryByTestId('pre-chat-answers')).toBeNull();
+    expect(screen.queryByText('✓ هویت تأییدشده')).toBeNull();
+  });
+
   it('renders a product message card with brand, name and price', async () => {
     vi.mocked(fetchMessages).mockResolvedValue([
       { id: 'm1', sender_type: 'USER', content: '', message_type: 'PRODUCT', client_message_id: 'm1', created_at: '2024-01-01T10:00:00Z', seen: true, attachment_url: null,
