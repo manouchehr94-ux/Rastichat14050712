@@ -46,6 +46,7 @@ if command -v certutil >/dev/null; then
 else echo "WARNING: certutil (libnss3-tools) missing: Chromium will not trust the sandbox CA"; fi
 
 echo "== PostgreSQL role + database, Redis"
+[ "${RESET_DB:-0}" = 1 ] && { su postgres -c "dropdb --if-exists rasti_stg"; echo "rasti_stg dropped (RESET_DB=1)"; }
 su postgres -c "psql -qAt -c \"select 1 from pg_roles where rolname='rasti'\"" | grep -q 1 || su postgres -c "psql -qc \"create role rasti login superuser password 'rasti'\""
 su postgres -c "psql -qAt -c \"select 1 from pg_database where datname='rasti_stg'\"" | grep -q 1 || su postgres -c "createdb -O rasti rasti_stg"
 redis-cli -n 5 flushdb >/dev/null
@@ -93,9 +94,12 @@ echo "== integrations used by the integration-platform specs (a legitimate host 
   PLATID=$($PY manage.py shell -c "from platforms.models import Platform; print(Platform.objects.get(name='STG Platform').id)" 2>/dev/null | tail -1)
   OUT=$ST/integration.json; echo '{}' > $OUT
   for slug in stg-host stg-mallory; do
-    if ! $PY manage.py shell -c "from integrations.models import Integration; import sys; sys.exit(0 if Integration.objects.filter(slug='$slug').exists() else 1)" >/dev/null 2>&1; then
-      $PY manage.py integration_create --slug $slug --name "$slug" --platform-id $PLATID \
-        --scopes tenants:read,tenants:write,identity:customer,identity:staff,identity:platform,conversations:initiate,context:write >/dev/null
+    has() { $PY manage.py shell -c "$1" >/dev/null 2>&1; }
+    has "from integrations.models import Integration; import sys; sys.exit(0 if Integration.objects.filter(slug='$slug').exists() else 1)" \
+      || $PY manage.py integration_create --slug $slug --name "$slug" --platform-id $PLATID \
+           --scopes tenants:read,tenants:write,identity:customer,identity:staff,identity:platform,conversations:initiate,context:write >/dev/null
+    if ! has "from integrations.models import IntegrationKey; import sys; sys.exit(0 if IntegrationKey.objects.filter(integration__slug='$slug', revoked_at__isnull=True).exists() else 1)"; then
+      rm -f $ST/$slug.private.pem $ST/$slug.public.pem
       $PY manage.py integration_keygen --out-dir $ST --name $slug >/dev/null
       KID=$($PY manage.py integration_key_add --integration $slug --public-key-file $ST/$slug.public.pem | sed -n 's/^kid=//p')
       echo "$KID" > $ST/$slug.kid

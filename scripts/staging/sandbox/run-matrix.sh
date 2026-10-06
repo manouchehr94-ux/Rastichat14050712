@@ -7,6 +7,9 @@
 SB="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"; S=${SANDBOX_DIR:?set SANDBOX_DIR, see README.md}; R=$(cd "$SB/../../.." && pwd); PY=${VENV:-/tmp/venv}/bin/python
 RUN=${1:?run label}; SOAK=${2:-30}; E=$S/evidence/final/$RUN; mkdir -p $E
 H=$SB; L=$S/stg/logs
+export SB R   # the staging stages source pw.env in sub-shells, and pw.env needs both
+# NOTHING else may run on this box during a recorded run: the browser stages simulate network outages by signalling the shared balancer,
+# and a concurrent test run (or any other load) corrupts them and the soak
 declare -a NAMES RCS DURS
 ms() { echo $(( $(date +%s%N) / 1000000 )); }
 stage() { # stage <name> <command...>   (command runs in a subshell; its output goes to $E/<name>.log)
