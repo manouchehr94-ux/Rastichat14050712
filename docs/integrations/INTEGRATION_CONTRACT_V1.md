@@ -65,8 +65,9 @@ def sign(private_pem, kid, slug, method, path, body=b""):
 ```
 
 ### 3.3 Scopes
-`tenants:read`, `tenants:write` (this slice); reserved: `identity:customer`, `identity:staff`, `identity:platform`,
-`conversations:initiate`, `events:receive`. Effective scopes = key scopes ∩ integration scopes.
+`tenants:read`, `tenants:write` (provisioning), `identity:customer`, `identity:staff`, `identity:platform` (identity and
+membership management), `conversations:initiate` (§12), `context:write` (§11). Reserved, not yet used: `events:receive` (§13).
+Effective scopes = key scopes ∩ integration scopes. Grant a key only what that host process needs.
 
 ### 3.4 Limits
 Per-integration budget (default 300/min → `429 rate_limited`); repeated failed authentications from one IP are
@@ -217,17 +218,37 @@ question / structured form — pure configuration. Full schema, limits and examp
 An integration may seed it at provisioning with `defaults.widget` (applied once; see §6 ownership). Projects that
 never set a configuration keep the original widget behaviour.
 
-## 10. Widget & headless clients  **[widget implemented — PR C; reference host & headless client — PR D]**
+## 10. Widget & headless clients  **[implemented — widget PR C; reference host PR D; headless: `HEADLESS.md`]**
 * Widget: `RastiChat.init({project, bootstrap: async () => fetchAssertionFromMyBackend()})` — see `docs/widget/EMBEDDING.md`.
   The project key is public; identity only via `bootstrap`; no long-lived credential in markup.
-* Headless: the same REST + WebSocket protocol the widget uses (OpenAPI at `/api/schema/`), plus a small
-  TypeScript client in `packages/`. Realtime always via single-use tickets (`/widget/ws-ticket/`), never URL credentials.
+* Headless: the same REST + WebSocket protocol the widget uses (OpenAPI at `/api/schema/`); see `HEADLESS.md` and the runnable
+  `examples/headless/headless.mjs`. No SDK package is shipped (decision recorded in `V1_SCOPE_AND_DEFERRALS.md`).
+  Realtime always via single-use tickets (`/widget/ws-ticket/`), never URL credentials.
 
-## 11. Context  **[specified — PR B/C]**
-Hosts **push** small, tenant-scoped, minimised snapshots (customer name, tier, current page, order reference…) either in
-the assertion `ctx` claim or via `PUT /api/v1/integrations/tenants/{t}/contexts/{subject}/`. Operators see them in the
-conversation sidebar. RastiChat never calls back into the host database. No credentials; ≤ 4 KB; classified as
-`identity`, `profile`, `context` or `sensitive` (sensitive is not stored unless the project opts in).
+## 11. Context  **[implemented]**
+Hosts **push** small, tenant-scoped, minimised snapshots about a *verified customer* — either in the optional `ctx` claim of the
+customer assertion or with `PUT /api/v1/integrations/tenants/{t}/contexts/{customer}/` (scope `context:write`). RastiChat never
+calls back into the host database. Operators see the snapshot in the conversation sidebar (`customer-context` → `host_context`).
+
+```json
+PUT /api/v1/integrations/tenants/shop-1/contexts/cust-42/
+{ "profile": {"tier": "gold", "orders": 12},      // display data about the person
+  "context": {"page": "/cart", "order_ref": "A-1001"} }   // what the conversation is about now
+→ 200 {"external_user_id": "cust-42", "profile": {...}, "context": {...}, "updated_at": "..."}
+```
+* **Replace semantics:** PUT replaces the whole snapshot (idempotent; keys you omit are removed). `GET` reads it, `DELETE` removes it
+  (204, also when none exists).
+* **Strict shape:** flat keys `^[a-z][a-z0-9_]{0,39}$`; values are strings (≤200 chars), numbers or booleans — no nesting, no `null`;
+  ≤20 keys per section; ≤4 KB in total. Violations → `400 invalid_context` / `context_too_large`.
+* **No credentials, no sensitive data:** key names that look like credentials/payment data (`password`, `token`, `secret`, `api_key`,
+  `cookie`, `session`, `card`, `cvv`, `iban`, `otp`…), JWT-like values, control characters and any `sensitive` section are refused with
+  `400 sensitive_context_not_accepted`. v1 has no "sensitive" tier at all.
+* **Tenant-scoped:** the snapshot belongs to one customer identity of one tenant of *your* integration; another integration or tenant
+  gets the uniform `403 tenant_unavailable`. A guest or a browser-claimed id never has host context.
+* **Lifecycle:** it lives as long as the customer identity; disabling the customer blocks further pushes (`403 identity_disabled`);
+  delete it with `DELETE` (data-subject requests) — history of conversations is governed by the retention rules in
+  `INTEGRATION_PLATFORM.md`.
+* **Audit:** the audit trail records *which keys* were written, never the values.
 
 ## 12. Platform ↔ tenant conversations  **[implemented — PR E]**
 One conversation engine, two directions, generic platform/tenant semantics ("platform" = the operator of the integration's
@@ -259,10 +280,11 @@ One conversation engine, two directions, generic platform/tenant semantics ("pla
   this tenant. Audit: `support_conversation_created|closed|reopened` (identifiers only).
 Operator tooling: `manage.py integration_purge_idempotency --older-than-hours 48` (cron).
 
-## 13. Webhooks / events  **[specified — delivery follows PR D]**
+## 13. Webhooks / events  **[designed; delivery deliberately deferred — see `V1_SCOPE_AND_DEFERRALS.md`]**
+The scope `events:receive` is reserved. The design below is the contract future delivery will follow; **v1 does not send events.**
 Signed (Ed25519, RastiChat deployment key published at `/.well-known/rastichat-jwks.json`), at-least-once, bounded
 exponential backoff, `event_id` for consumer idempotency, `version`, tenant + integration identity, minimal PII, no
-secrets. Callback URLs: https only, resolved-IP checked against private/link-local ranges, no redirects, fixed
+secrets. Callback URLs: https only, resolved-IP checked against private/link-local ranges at connect time, no redirects, fixed
 timeouts (SSRF hardening). Events: `conversation.created|assigned|closed|reopened`, `message.created`,
 `attachment.created`, `rating.submitted`, `support_conversation.created`.
 

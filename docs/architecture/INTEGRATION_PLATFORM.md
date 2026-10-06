@@ -106,14 +106,43 @@ uses the existing scheduler-worker pattern.)
 | Host retries any call | PUT/DELETE idempotent; mutating non-idempotent calls (PR E) take `Idempotency-Key` |
 | RastiChat unavailable | host must treat chat as optional UI (launcher hidden); no host function depends on chat |
 
+## Data classification and retention
+
+What RastiChat stores about a host's people, why, and for how long. Nothing here is replicated from the host database: only what
+the host chooses to send, minimised.
+
+| Class | Examples | Where | Source | Retention / removal |
+|---|---|---|---|---|
+| **Identity** (pseudonymous key) | external customer/staff id (`sub`), tenant id | `ExternalIdentity`, `Visitor.external_id` (`int:<slug>:<sub>`) | signed assertion only | kept while the tenant exists; `disable` stops access immediately; removal is an explicit retention operation (below) |
+| **Profile display data** | display name | `Visitor.name`, staff `User.display_name` | assertion `name` (≤255 chars) | updated on every assertion; goes when the identity is erased |
+| **Conversation context** | plan/tier, current page, order reference | `ExternalContext` (`profile`, `context`) | `context:write` API or `ctx` claim | replaced as a whole on each push; `DELETE …/contexts/{customer}/` removes it |
+| **Conversation content** | messages, attachments, pre-chat answers | existing conversation tables / private media | the customer and operators | governed by the existing retention process; **never deleted merely because host membership ended** |
+| **Sensitive** (credentials, payment data, national ids, health…) | — | **not accepted** | refused by the context validator (`sensitive_context_not_accepted`); credential-like values/keys rejected | n/a |
+| **Secrets** | host private keys | never stored (RastiChat holds public keys only) | — | key revocation (`integration_key_revoke`) |
+
+Rules: no secret or token is ever placed in `metadata`, context, audit rows or log lines (audit stores identifiers and key *names*;
+`common/observability` drops credential-named fields and sanitises values). Host-supplied text is rendered as text, never as markup.
+**Retention operations are manual and explicit** (none run automatically as a side effect of deprovisioning); erasing one customer
+= disable → delete context → the operator-approved conversation deletion procedure for that visitor.
+
+## Observability
+
+`common/observability.emit()` writes one structured line (`rastichat_event event=<name> label=<code> …`) and increments a
+day-bucketed Redis counter. Counters are returned by the token-protected `GET /api/v1/health/monitoring/` as `events_last_24h`.
+Alert on: `token_refused:replay` / `token_refused:*` spikes (attack or clock skew), `cross_tenant_denied:*`, `rate_limited`,
+`ws_auth:refused`, and the log line `integration_replay_store_unavailable` (Redis down → no integration call succeeds).
+
 ## Implementation status
 
 | Slice | PR | Status |
 |---|---|---|
-| Integration, keys, mapping, signed-request auth, replay protection, scopes, provisioning, lifecycle, audit, throttling, CLI | A | **Implemented** (this PR) |
-| Identity assertions, customer/staff/platform bootstrap, guest upgrade, membership/identity deprovisioning | B | **Implemented** (backend; dashboard SSO landing page: see PR) |
+| Integration, keys, mapping, signed-request auth, replay protection, scopes, provisioning, lifecycle, audit, throttling, CLI | A | **Implemented** |
+| Identity assertions, customer/staff/platform bootstrap, guest upgrade, membership/identity deprovisioning | B | **Implemented** |
 | Launcher config, pre-chat schema/persistence, widget config API, widget (launcher, lazy start, pre-chat form, bootstrap), dashboard settings + sidebar | C | **Implemented** |
-| Reference (non-RastiSi) host + generic E2E | D | Specified |
+| Reference (non-RastiSi) host + generic E2E (+ headless proof) | D | **Implemented** |
 | Platform-initiated conversations, tenant start/resume, close/reopen, notifications, integration initiation API + Idempotency-Key | E | **Implemented** |
-| RastiSi adapter & UI flows | F, G | Specified |
-| Webhook/event delivery | after D | Specified (contract only) |
+| RastiSi adapter & UI flows (RastiSi repository, `apps/chat_integration`) | F, G | **Implemented** (draft PR in the RastiSi repository) |
+| Rollout/rollback runbook, RastiSi cross-system E2E, combined verification | H | **Implemented** |
+| Host-pushed customer context (`context:write`, `ctx` claim, operator sidebar) | verification phase | **Implemented** |
+| Structured events + counters | verification phase | **Implemented** |
+| Webhook/event delivery | — | **Deferred by design** (`docs/integrations/V1_SCOPE_AND_DEFERRALS.md`) |
