@@ -11,6 +11,8 @@ declare -a NAMES RCS DURS
 ms() { echo $(( $(date +%s%N) / 1000000 )); }
 stage() { # stage <name> <command...>   (command runs in a subshell; its output goes to $E/<name>.log)
   local name=$1; shift; local t=$(ms)
+  # dry-run aid only (never used for a recorded run): SKIP_STAGES="02-backend-tests 08-soak"
+  if [[ " ${SKIP_STAGES:-} " == *" $name "* ]]; then echo "$(date -u +%T) -- $name SKIPPED (SKIP_STAGES)" | tee -a $E/progress.log; NAMES+=("$name (SKIPPED)"); RCS+=(0); DURS+=(0); return; fi
   echo "$(date -u +%T) >> $name" | tee -a $E/progress.log
   ( "$@" ) > $E/$name.log 2>&1 < /dev/null; local rc=$?
   NAMES+=("$name"); RCS+=($rc); DURS+=($(( ($(ms) - t) / 1000 )))
