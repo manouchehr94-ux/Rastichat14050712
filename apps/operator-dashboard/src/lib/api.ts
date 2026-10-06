@@ -434,6 +434,20 @@ export const sendSupportMessage = async (convId: string, content: string, client
     if (!res.ok) throw new Error('Failed to send message');
     return res.json();
 };
+export const markSupportRead = async (convId: string) => {
+    const res = await fetch(`${API_BASE}/support/${convId}/mark_read/`, { method: 'POST', headers: { 'Authorization': `Bearer ${getToken()}` } });
+    if (!res.ok) throw new Error('Failed to mark read');
+};
+export const closeSupportConversation = async (convId: string) => {
+    const res = await fetch(`${API_BASE}/support/${convId}/close/`, { method: 'POST', headers: { 'Authorization': `Bearer ${getToken()}` } });
+    if (!res.ok) throw new Error('Failed to close');
+    return res.json();
+};
+export const reopenSupportConversation = async (convId: string) => {
+    const res = await fetch(`${API_BASE}/support/${convId}/reopen/`, { method: 'POST', headers: { 'Authorization': `Bearer ${getToken()}` } });
+    if (!res.ok) throw new Error('Failed to reopen');
+    return res.json();
+};
 export const connectSupportWebSocket = (convId: string, onMessage: (data: SupportSocketMessage) => void): WebSocket =>
     openTicketSocket(`/v2/support/${convId}/`, { kind: 'support', conversation_id: convId }, (data) => onMessage(data as SupportSocketMessage), async () => {
         try {

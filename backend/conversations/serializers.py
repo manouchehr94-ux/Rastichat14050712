@@ -85,6 +85,7 @@ class ConversationSerializer(serializers.ModelSerializer):
     team_name = serializers.CharField(source='team.name', read_only=True, default=None)
     queue_name = serializers.CharField(source='queue.name', read_only=True, default=None)
     sla = serializers.SerializerMethodField()
+    workspace_name = serializers.CharField(source='workspace.name', read_only=True)
 
     class Meta:
         model = Conversation
@@ -92,10 +93,12 @@ class ConversationSerializer(serializers.ModelSerializer):
             'id', 'type', 'status', 'subject', 'category', 'notes', 'rating', 'priority',
             'queue', 'queue_name', 'team', 'team_name',
             'created_at', 'updated_at', 'closed_at', 'unread_count', 'visitor', 'last_message', 'assigned_to', 'sla',
+            'opened_by_side', 'subject_key', 'workspace', 'workspace_name',
         ]
         read_only_fields = [
             'id', 'type', 'status', 'created_at', 'updated_at', 'closed_at', 'unread_count',
             'rating', 'visitor', 'last_message', 'assigned_to', 'queue_name', 'team_name', 'sla',
+            'opened_by_side', 'subject_key', 'workspace', 'workspace_name',
         ]
 
     def get_assigned_to(self, obj):
@@ -108,9 +111,12 @@ class ConversationSerializer(serializers.ModelSerializer):
         request = self.context.get('request')
         if not request or not request.user.is_authenticated:
             return 0
-        return obj.messages.exclude(receipts__user=request.user).exclude(
+        unread = obj.messages.exclude(receipts__user=request.user).exclude(
             message_type=Message.MessageType.INTERNAL_NOTE,
-        ).count()
+        )
+        if obj.type == Conversation.Type.PLATFORM_SUPPORT:
+            unread = unread.exclude(sender=request.user)   # a support thread's own outgoing messages are never "unread" for the sender
+        return unread.count()
 
     def get_visitor(self, obj):
         if not obj.visitor:

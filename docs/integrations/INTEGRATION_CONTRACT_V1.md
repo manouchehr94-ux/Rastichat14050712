@@ -81,14 +81,14 @@ throttled. Redis unavailable → `503 replay_store_unavailable` (fail closed).
 | HTTP | code | meaning |
 |---|---|---|
 | 401 | `missing_token`, `invalid_token`, `token_expired`, `token_replayed`, `binding_mismatch`, `key_revoked` | authentication |
-| 403 | `integration_disabled`, `scope_denied`, `tenant_unavailable`, `tenant_mismatch`, `identity_disabled`, `origin_not_allowed`, `origin_required`, `origin_mismatch` | authorisation |
-| 400 | `validation_error` (with `details` per field), `invalid_external_id`, `invalid_assertion`, `invalid_project` | request |
+| 403 | `integration_disabled`, `scope_denied`, `tenant_unavailable`, `tenant_mismatch`, `identity_disabled`, `origin_not_allowed`, `origin_required`, `origin_mismatch`, `initiator_not_authorized` | authorisation |
+| 400 | `validation_error` (with `details` per field), `invalid_external_id`, `invalid_assertion`, `invalid_project`, `idempotency_key_required`, `empty_message`, `message_too_long` | request |
 | 404 | `tenant_not_found`, `identity_not_found` | also returned for another integration's tenant (no existence oracle) |
-| 409 | `tenant_archived` | restore with `status: "active"` |
+| 409 | `tenant_archived` (restore with `status: "active"`), `idempotency_conflict`, `thread_already_active` | |
 | 429 | `rate_limited` | back off (`Retry-After`) |
 | 503 | `replay_store_unavailable` | retry later |
 
-## 5. Idempotency & retries  **[implemented for provisioning; Idempotency-Key specified for PR E]**
+## 5. Idempotency & retries  **[implemented]**
 * `PUT` and `DELETE` are idempotent by definition; retry freely (with a fresh token).
 * Non-idempotent creations (e.g. platform-initiated conversation) take an `Idempotency-Key` header; the same key +
   same body returns the original result, the same key with a different body → `409 idempotency_conflict`.
@@ -224,11 +224,35 @@ the assertion `ctx` claim or via `PUT /api/v1/integrations/tenants/{t}/contexts/
 conversation sidebar. RastiChat never calls back into the host database. No credentials; ≤ 4 KB; classified as
 `identity`, `profile`, `context` or `sensitive` (sensitive is not stored unless the project opts in).
 
-## 12. Platform ↔ tenant conversations  **[specified — PR E]**
-Generic directions: tenant admin → platform support (via staff assertion, normal widget/dashboard flow) and
-**platform → tenant admin** (platform opens a conversation with a chosen tenant without the tenant writing first):
-`POST /api/v1/integrations/tenants/{t}/support-conversations/` (scope `conversations:initiate`, `Idempotency-Key`),
-one active thread per `(tenant, subject_key)`; the tenant's admins are notified and reply in their support inbox.
+## 12. Platform ↔ tenant conversations  **[implemented — PR E]**
+One conversation engine, two directions, generic platform/tenant semantics ("platform" = the operator of the integration's
+`Platform`; "tenant" = a mapped workspace):
+
+* **tenant admin → platform support**: a tenant Owner/Admin (staff assertion, normal dashboard) uses `POST /api/v1/support/start/`
+  (create-or-resume) or `POST /api/v1/support/` (always a new ticket); platform staff answer from the platform inbox.
+* **platform → tenant admin** (the tenant never has to write first):
+  * in the platform dashboard: *"گفتگوی جدید با سازمان"* → `POST /api/v1/platform/support/start/` (platform **Owner/Admin**;
+    the workspace must belong to the caller's platform — otherwise a uniform 404; support agents may reply but not initiate;
+    `GET /platform/support/workspaces/` feeds the picker);
+  * from the host's trusted backend (server-to-server):
+    `POST /api/v1/integrations/tenants/{t}/support-conversations/` — scope `conversations:initiate`, **`Idempotency-Key`
+    required**, body `{"initiator_user_id", "subject"?, "subject_key"?, "message"}`. `initiator_user_id` must be an active
+    **owner/admin platform member this integration created** (assertion or `PUT /platform/members/{id}/`); the message is
+    authored by that RastiChat user. → `201 {"conversation_id","created":true,"status","subject_key","opened_by":"platform"}`.
+* **Idempotency**: at most ONE active thread per `(tenant, subject_key)` (default `general`; a partial unique constraint
+  decides races): repeating a start **resumes** it and appends the message. `client_message_id` (or the integration's
+  `Idempotency-Key`) makes retries safe; the same `Idempotency-Key` with a different request → `409 idempotency_conflict`;
+  a retry replays the first response (`Idempotent-Replayed: true`). A **closed** thread is never silently reused — a new
+  start opens a fresh one; a *reply* to a closed thread reopens it.
+* **Lifecycle**: `POST …/close/`, `…/reopen/` on both sides (reopen refuses `409 thread_already_active` if another thread
+  on the same subject is open). Status says who owes the next answer (`WAITING_FOR_WORKSPACE` / `WAITING_FOR_PLATFORM`).
+* **Realtime & unread**: messages travel on `support_chat_<id>` (frames carry `sender_side: platform|tenant`); the other
+  side gets an in-app notification (`SUPPORT_MESSAGE`: tenant admins for platform messages, platform staff for tenant
+  messages; never the sender, never tenant operators); a thread's own messages are not "unread" for their author.
+* **Isolation**: tenant admins see only their workspace's threads (exact-workspace admin check — admin of A who is only an
+  operator of B sees nothing of B); platform staff only their platform's tenants; another integration can never address
+  this tenant. Audit: `support_conversation_created|closed|reopened` (identifiers only).
+Operator tooling: `manage.py integration_purge_idempotency --older-than-hours 48` (cron).
 
 ## 13. Webhooks / events  **[specified — delivery follows PR D]**
 Signed (Ed25519, RastiChat deployment key published at `/.well-known/rastichat-jwks.json`), at-least-once, bounded

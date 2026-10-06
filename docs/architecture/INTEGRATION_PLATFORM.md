@@ -114,6 +114,6 @@ uses the existing scheduler-worker pattern.)
 | Identity assertions, customer/staff/platform bootstrap, guest upgrade, membership/identity deprovisioning | B | **Implemented** (backend; dashboard SSO landing page: see PR) |
 | Launcher config, pre-chat schema/persistence, widget config API, widget (launcher, lazy start, pre-chat form, bootstrap), dashboard settings + sidebar | C | **Implemented** |
 | Reference (non-RastiSi) host + generic E2E | D | Specified |
-| Platform-initiated conversations | E | Specified |
+| Platform-initiated conversations, tenant start/resume, close/reopen, notifications, integration initiation API + Idempotency-Key | E | **Implemented** |
 | RastiSi adapter & UI flows | F, G | Specified |
 | Webhook/event delivery | after D | Specified (contract only) |

@@ -383,9 +383,20 @@ class DashboardSupportConsumer(StaffRateLimitMixin, BaseChatConsumer):
         if await self._staff_rate_limited('support_ws_message'): return
         msg = await self._save_support_message(content.get('client_message_id'), msg_text)
         if not msg: return
-        await self.channel_layer.group_send(self.group_name, {'type': 'chat.message', 'message': {'id': str(msg.id), 'sender_type': 'USER', 'content': msg.content, 'created_at': msg.created_at.isoformat()}})
+        from . import support_service
+        side = await database_sync_to_async(support_service.side_of)(self.user, self.conversation)
+        await self.channel_layer.group_send(self.group_name, {'type': 'chat.message', 'message': support_service.realtime_payload(msg, side)})
 
     @database_sync_to_async
     def _save_support_message(self, client_msg_id, msg_text):
-        if Message.objects.filter(conversation=self.conversation, client_message_id=client_msg_id).exists(): return None
-        return Message.objects.create(conversation=self.conversation, sender_type=Message.SenderType.USER, sender=self.user, content=msg_text, client_message_id=client_msg_id)
+        """Same service as the REST endpoints: idempotent, status/side-aware, notifies the other side. The broadcast is
+        done by the caller (receive_json) so the sender's own socket receives its echo."""
+        from . import support_service
+        side = support_service.side_of(self.user, self.conversation)
+        if side is None or not client_msg_id:
+            return None
+        try:
+            msg, created = support_service.post_message(self.conversation, self.user, side, msg_text, client_msg_id, broadcast=False)
+        except support_service.SupportError:
+            return None
+        return msg if created else None

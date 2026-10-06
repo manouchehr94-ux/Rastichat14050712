@@ -13,10 +13,10 @@ from .authentication import body_hash
 from .keys import new_kid
 from .models import Integration, IntegrationKey
 from .scopes import (
-    IDENTITY_CUSTOMER, IDENTITY_PLATFORM, IDENTITY_STAFF, TENANTS_READ, TENANTS_WRITE,
+    CONVERSATIONS_INITIATE, IDENTITY_CUSTOMER, IDENTITY_PLATFORM, IDENTITY_STAFF, TENANTS_READ, TENANTS_WRITE,
 )
 
-ALL_TEST_SCOPES = (TENANTS_READ, TENANTS_WRITE, IDENTITY_CUSTOMER, IDENTITY_STAFF, IDENTITY_PLATFORM)
+ALL_TEST_SCOPES = (TENANTS_READ, TENANTS_WRITE, IDENTITY_CUSTOMER, IDENTITY_STAFF, IDENTITY_PLATFORM, CONVERSATIONS_INITIATE)
 
 
 class FakeHost:
@@ -48,8 +48,9 @@ class FakeHost:
     def call(self, client, method, path, payload=None, **token_kwargs):
         """Send a correctly signed request with a DRF/Django test client."""
         body = b'' if payload is None else json.dumps(payload).encode()
+        extra_headers = token_kwargs.pop('extra_headers', None)
         token = self.token(method.upper(), path, body, **token_kwargs)
-        kwargs = {'HTTP_AUTHORIZATION': f'Bearer {token}'}
+        kwargs = {'HTTP_AUTHORIZATION': f'Bearer {token}', **(extra_headers or {})}
         if payload is not None:
             kwargs.update(data=body, content_type='application/json')
         return getattr(client, method.lower())(path, **kwargs)

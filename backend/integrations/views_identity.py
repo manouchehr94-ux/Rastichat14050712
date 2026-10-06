@@ -211,3 +211,48 @@ def provisioning_mapping(integration, external_tenant_id):
 def _staff_identity(integration, external_user_id):
     return ExternalIdentity.objects.select_related('user').filter(
         integration=integration, kind=ExternalIdentity.Kind.STAFF, external_user_id=external_user_id).first()
+
+
+class SupportConversationView(IntegrationAPIView):
+    """`POST /api/v1/integrations/tenants/<t>/support-conversations/` — a platform staff member of THIS integration opens
+    (or resumes) a support conversation with one of its tenants, through the host's trusted backend (Contract v1 §12).
+
+    Requires scope `conversations:initiate` and an `Idempotency-Key`. `initiator_user_id` must be a staff identity this
+    integration created with an owner/admin platform membership (assertion or `PUT /platform/members/<id>/`); the
+    message is authored by that RastiChat user, so replies and audit are attributable. One active thread per
+    (tenant, `subject_key`): repeating the call resumes it.
+    """
+    required_scopes = {'POST': (scopes.CONVERSATIONS_INITIATE,)}
+
+    def post(self, request, external_tenant_id):
+        from conversations import support_service
+        from conversations.models import Conversation
+        from . import idempotency
+        from .models import ExternalMembership
+        integration = request.user.integration
+        data = request.data if hasattr(request.data, 'get') else {}
+        mapping = ident.resolve_tenant(integration, TenantView._external_id(external_tenant_id))
+        initiator_id = ident.valid_external_id(data.get('initiator_user_id'), 'initiator_user_id')
+        identity = _staff_identity(integration, initiator_id)
+        membership = identity and ExternalMembership.objects.filter(
+            identity=identity, platform=integration.platform, external_role__in=('owner', 'admin')).exists()
+        if identity is None or identity.status != ExternalIdentity.Status.ACTIVE or not membership:
+            raise IntegrationAPIError('initiator_not_authorized',
+                                      'The initiator is not an active owner/admin of this integration\'s platform.', 403)
+        payload = {'tenant': external_tenant_id, 'initiator': initiator_id, 'subject': data.get('subject'),
+                   'subject_key': data.get('subject_key'), 'message': data.get('message'),
+                   'client_message_id': data.get('client_message_id')}
+
+        def perform():
+            try:
+                conv, created, _ = support_service.start_thread(
+                    mapping.workspace, identity.user, Conversation.Side.PLATFORM, subject=data.get('subject'),
+                    subject_key=data.get('subject_key'), message=data.get('message'),
+                    client_message_id=data.get('client_message_id'))
+            except support_service.SupportError as exc:
+                raise IntegrationAPIError(exc.code, exc.message, exc.status)
+            return (201 if created else 200), {
+                'conversation_id': str(conv.id), 'created': created, 'status': conv.status, 'subject_key': conv.subject_key,
+                'external_tenant_id': mapping.external_tenant_id, 'opened_by': conv.opened_by_side.lower()}
+
+        return idempotency.run_once(request, integration, f'support-conversations:{external_tenant_id}', payload, perform)

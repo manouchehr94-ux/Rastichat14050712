@@ -1,10 +1,14 @@
 'use client';
 import { useState, useEffect, useRef } from 'react';
-import { fetchSupportConversations, fetchSupportMessages, sendSupportMessage, connectSupportWebSocket, createSupportRequest } from '@/lib/api';
+import {
+    fetchSupportConversations, fetchSupportMessages, sendSupportMessage, connectSupportWebSocket, createSupportRequest,
+    markSupportRead, closeSupportConversation, reopenSupportConversation,
+} from '@/lib/api';
+import { isMine, statusLabel, openedByLabel } from '@/lib/supportThread';
 import { useRouter } from 'next/navigation';
 
-interface Conversation { id: string; status: string; subject: string; unread_count?: number; }
-interface Message { id: string; content: string; sender_type: string; }
+interface Conversation { id: string; status: string; subject: string; unread_count?: number; opened_by_side?: string; }
+interface Message { id: string; content: string; sender_type: string; sender_side?: string; }
 
 export default function SupportPage() {
     const [conversations, setConversations] = useState<Conversation[]>([]);
@@ -26,6 +30,8 @@ export default function SupportPage() {
         setSelectedConv(conv);
         const msgs = await fetchSupportMessages(conv.id);
         setMessages(msgs);
+        // opening a thread reads it (clears the unread badge, including a thread the platform started)
+        markSupportRead(conv.id).then(() => fetchSupportConversations().then(setConversations)).catch(() => {});
         if (wsRef.current) wsRef.current.close();
         wsRef.current = connectSupportWebSocket(conv.id, (data) => {
             setMessages(prev => {
@@ -39,8 +45,18 @@ export default function SupportPage() {
         if (!selectedConv || !input.trim()) return;
         const clientId = 'msg_' + Date.now();
         const content = input; setInput('');
-        setMessages(prev => [...prev, { id: clientId, content, sender_type: 'USER' }]);
+        setMessages(prev => [...prev, { id: clientId, content, sender_type: 'USER', sender_side: 'tenant' }]);
         try { await sendSupportMessage(selectedConv.id, content, clientId); } catch (e) { console.error(e); }
+    };
+
+    const refresh = () => fetchSupportConversations().then(setConversations).catch(() => {});
+    const handleToggleClosed = async () => {
+        if (!selectedConv) return;
+        try {
+            const updated = selectedConv.status === 'CLOSED' ? await reopenSupportConversation(selectedConv.id) : await closeSupportConversation(selectedConv.id);
+            setSelectedConv({ ...selectedConv, status: updated.status });
+            refresh();
+        } catch (e) { console.error(e); }
     };
 
     const handleCreate = async () => {
@@ -72,18 +88,23 @@ export default function SupportPage() {
                                 <span className="bg-red-500 text-white text-xs rounded-full px-2">{conv.unread_count}</span>
                             )}
                         </div>
-                        <div className="text-xs text-gray-500">{conv.status}</div>
+                        <div className="text-xs text-gray-500">{statusLabel(conv.status, 'tenant')}{conv.opened_by_side === 'PLATFORM' && <span className="mr-2 text-purple-600">· {openedByLabel('PLATFORM')}</span>}</div>
                     </div>
                 ))}
             </div>
             <div className="flex-1 flex flex-col">
                 {selectedConv ? (
                     <>
-                        <div className="p-4 bg-white border-b font-bold text-sm">#{selectedConv.subject}</div>
+                        <div className="p-4 bg-white border-b flex justify-between items-center gap-2">
+                            <span className="font-bold text-sm">#{selectedConv.subject}</span>
+                            <button type="button" onClick={handleToggleClosed} className="text-xs border px-3 py-1.5 rounded-lg">
+                                {selectedConv.status === 'CLOSED' ? 'بازگشایی' : 'بستن گفتگو'}
+                            </button>
+                        </div>
                         <div className="flex-1 overflow-y-auto p-4 space-y-3">
                             {messages.map(msg => (
-                                <div key={msg.id} className={`flex ${msg.sender_type === 'USER' ? 'justify-start' : 'justify-end'}`}>
-                                    <div className={`p-3 rounded-lg max-w-xs text-sm ${msg.sender_type === 'USER' ? 'bg-purple-600 text-white' : 'bg-gray-200'}`}>{msg.content}</div>
+                                <div key={msg.id} className={`flex ${isMine(msg, 'tenant') ? 'justify-start' : 'justify-end'}`}>
+                                    <div className={`p-3 rounded-lg max-w-xs text-sm break-words whitespace-pre-wrap ${isMine(msg, 'tenant') ? 'bg-purple-600 text-white' : 'bg-gray-200'}`}>{msg.content}</div>
                                 </div>
                             ))}
                         </div>

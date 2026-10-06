@@ -55,6 +55,24 @@ class Conversation(models.Model):
 
     ACTIVE_STATUSES = (Status.OPEN, Status.PENDING, Status.WAITING_FOR_WORKSPACE, Status.WAITING_FOR_PLATFORM)
 
+    class Side(models.TextChoices):
+        TENANT = 'TENANT', 'Tenant'
+        PLATFORM = 'PLATFORM', 'Platform'
+
+    # PLATFORM_SUPPORT conversations: which side opened the thread, and an optional stable key that makes
+    # "start or resume" idempotent (at most ONE active thread per workspace + key). Empty on legacy rows / customer chats.
+    opened_by_side = models.CharField(max_length=10, choices=Side.choices, blank=True, default='')
+    subject_key = models.CharField(max_length=64, blank=True, default='')
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(
+                fields=['workspace', 'subject_key'], name='uniq_active_support_thread',
+                condition=models.Q(type='PLATFORM_SUPPORT') & ~models.Q(subject_key='')
+                & models.Q(status__in=['OPEN', 'PENDING', 'WAITING_FOR_WORKSPACE', 'WAITING_FOR_PLATFORM']),
+            ),
+        ]
+
 
 class PriorityChange(models.Model):
     class Reason(models.TextChoices):

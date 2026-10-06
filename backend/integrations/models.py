@@ -210,3 +210,19 @@ class ExternalMembership(models.Model):
                            | models.Q(tenant_mapping__isnull=True, platform__isnull=False)),
                 name='ext_membership_exactly_one_scope'),
         ]
+
+
+class IdempotencyRecord(models.Model):
+    """Stored result of a non-idempotent integration call made with an `Idempotency-Key` (Contract v1 §5): the same key
+    with the same request replays the stored response; the same key with a different request is a conflict. Scoped per
+    integration; purge with `manage.py integration_purge_idempotency`."""
+    integration = models.ForeignKey(Integration, on_delete=models.CASCADE, related_name='idempotency_records')
+    key = models.CharField(max_length=128)
+    endpoint = models.CharField(max_length=200)
+    request_hash = models.CharField(max_length=64)
+    status_code = models.PositiveSmallIntegerField()
+    response_body = models.JSONField(default=dict)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        constraints = [models.UniqueConstraint(fields=['integration', 'key'], name='uniq_integration_idempotency_key')]
