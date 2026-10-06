@@ -2,7 +2,7 @@
 
 A walkthrough for a developer who has **only** this documentation. The working reference is `examples/reference-host/`
 (a ~150-line Node app with its own users and organisations — not RastiSi), proven by automated tests
-(`backend/integrations/tests_e2e.py`, `e2e/reference-host/`). Normative details: `INTEGRATION_CONTRACT_V1.md`.
+(`backend/integrations/tests_e2e.py`, `e2e/reference-host/`, `examples/headless/`). What exists and what is deferred: `V1_SCOPE_AND_DEFERRALS.md`. Normative details: `INTEGRATION_CONTRACT_V1.md`.
 
 You need: a RastiChat deployment you (or its operator) control, and a backend of your own that can sign a JWT with Ed25519
 (any language; Node has it built in, Python `PyJWT[crypto]`, Go/Java/PHP/Ruby/.NET libraries all do).
@@ -55,12 +55,17 @@ Optionally pre-sync staff with `PUT /integrations/tenants/<t>/members/<user>/`.
 ```
 Guests work when the project allows them (`bootstrap` returns `null`). More: `docs/widget/EMBEDDING.md`.
 
-## 7. Headless (your own UI)
-Same REST + WebSocket protocol, OpenAPI at `/api/schema/` — see the headless section of `docs/widget/EMBEDDING.md`.
+## 7. Optional: context for your operators, and your own UI
+* **Context.** Push a small flat snapshot about a signed-in customer (plan, current page, order reference) so operators see it in the
+  sidebar: `PUT /integrations/tenants/<t>/contexts/<customer>/ {"profile": {...}, "context": {...}}` (scope `context:write`), or put it in the
+  `ctx` claim of the customer assertion. No credentials, no nesting, ≤ 4 KB — Contract §11.
+* **Headless (your own UI).** The same REST + WebSocket protocol the widget uses, step by step in `HEADLESS.md`, proven by the runnable
+  `examples/headless/headless.mjs` (no widget, no RastiChat code).
 
 ## 8. Events
-Webhook/event delivery is specified (Contract §13) and not yet implemented; poll the REST API or use the operator
-dashboard until it ships.
+Webhook/event delivery is **deliberately not part of v1** (design in Contract §13, reasons in `V1_SCOPE_AND_DEFERRALS.md`). Nothing in
+your integration needs it to work; if you need to react to "conversation closed/assigned/rated" you must wait for that slice — there is
+no host-facing polling API and no host-specific mechanism to build against in the meantime.
 
 ## 9. Revoke / deprovision
 | You want to… | Call |

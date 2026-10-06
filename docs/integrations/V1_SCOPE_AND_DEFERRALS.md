@@ -39,7 +39,7 @@ RastiSi (`apps/chat_integration` in the RastiSi repository) is the third consume
 | 19 | Webhooks / events | **DEFERRED (explicitly allowed by the spec)** | See below |
 | 21–26 | RastiSi adapter, mapping, off-by-default flag, three flows | DONE | RastiSi PR (`apps/chat_integration`); cross-system E2E |
 | 28–29, 40 | Reference integration, reusability acceptance, generic E2E | DONE | see "Reusability proof" |
-| 30 | API versioning / deprecation policy | DONE | Contract §2: `/api/v1`, additive evolution, `Deprecation`/`Sunset` headers; no existing endpoint was removed |
+| 30 | API versioning / deprecation policy | DONE | Contract §2: `/api/v1`, additive evolution, `Deprecation`/`Sunset` headers. **Deprecated endpoints in this release: none**; no existing endpoint, field or message shape was removed or changed (new fields/endpoints are additive; legacy widget start mode `on_load` remains the default for projects not provisioned through the contract) |
 | 31, 32 | Security invariants (tenant isolation, WS tickets, visitor sessions, attachments, domains, logging, rate limits, per-integration least privilege) | DONE | preserved + negative tests; staging log review |
 | 33 | Privacy / data minimisation, classification, retention | DONE | `INTEGRATION_PLATFORM.md` → "Data classification and retention" |
 | 34 | Audit of critical operations | DONE | `integrations/audit.py` writes to the existing audit table (key names/identifiers only, never payload values) |
