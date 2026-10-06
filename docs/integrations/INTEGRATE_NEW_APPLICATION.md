@@ -44,7 +44,7 @@ res.type('text/plain').send(rastichat.assertion({ actor: 'customer', sub: user.i
                                                   origin: 'https://' + req.headers.host }));
 ```
 Assertions live ≤ 2 minutes (use 60 s) and are single-use. Staff: `actor: 'tenant_staff'` + generic `role`
-(`owner|admin|operator`), then send the browser to `<dashboard>/sso#assertion=<jwt>&next=/` (fragment, not query string).
+(`owner|admin|operator`), then send the browser to `<dashboard>/sso#assertion=<jwt>&next=/` (fragment, not query string; the operator dashboard is deployed under the `/admin` base path, e.g. `https://dash.example/admin/sso#…`).
 Optionally pre-sync staff with `PUT /integrations/tenants/<t>/members/<user>/`.
 
 ## 6. Embed the widget
