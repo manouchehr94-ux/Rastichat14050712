@@ -12,7 +12,11 @@ from django.dispatch import receiver
 
 from .domains import all_project_entries, origin_matches
 
-WIDGET_PATH_PREFIXES = ('/api/v1/widget/', '/api/v1/kb/public/')
+# `/identity/customer/` is the browser-side half of the trusted-customer bootstrap (the page's script exchanges the host-signed assertion for a
+# visitor session): it must be reachable from the host's own domain exactly like the widget endpoints. It is safe for the same reason — the request
+# is authenticated by the assertion and refused unless its Origin is one of THE PROJECT'S configured domains (`enforce_project_origin`). The staff
+# exchange (`/identity/staff/`) is called from the dashboards, which are on the static allow-list, so it is deliberately NOT opened up here.
+WIDGET_PATH_PREFIXES = ('/api/v1/widget/', '/api/v1/kb/public/', '/api/v1/identity/customer/')
 
 
 @receiver(check_request_enabled)

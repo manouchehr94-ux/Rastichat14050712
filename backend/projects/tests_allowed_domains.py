@@ -293,7 +293,10 @@ class CorsTests(_World, TestCase):
         res = self.preflight('/api/v1/widget/init/', 'https://a.stores.example.org')
         self.assertEqual(res.headers.get('Access-Control-Allow-Origin'), 'https://a.stores.example.org')
         # never for the dashboards' API, even for an origin that is configured on a project
-        for path in ('/api/v1/auth/login/', '/api/v1/support/', '/api/v1/ws/ticket/'):
+        # the trusted-customer exchange is part of the widget bootstrap, so it is enabled too; the STAFF exchange is not (dashboards use the static list)
+        res = self.preflight('/api/v1/identity/customer/', 'https://shop.example.com')
+        self.assertEqual(res.headers.get('Access-Control-Allow-Origin'), 'https://shop.example.com')
+        for path in ('/api/v1/auth/login/', '/api/v1/support/', '/api/v1/ws/ticket/', '/api/v1/identity/staff/'):
             self.assertIsNone(self.preflight(path, 'https://shop.example.com').headers.get('Access-Control-Allow-Origin'), path)
 
     @override_settings(CORS_ALLOW_ALL_ORIGINS=False, CORS_ALLOWED_ORIGINS=['https://static.example.net'])

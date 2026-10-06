@@ -88,6 +88,17 @@ test.describe.serial('Integration Contract v1 on the sandbox staging stack', () 
     expect((await s2s(HOST, 'PUT', '/api/v1/integrations/platform/members/plat-1/', { role: 'owner', display_name: 'Platform Owner' })).status).toBe(200);
   });
 
+  test('CORS under production-like settings: the customer exchange is enabled for the tenant domain, the staff exchange and dashboard API are not', async () => {
+    const preflight = (path, origin) => fetch(`${BASE}${path}`, { method: 'OPTIONS',
+      headers: { Origin: origin, 'Access-Control-Request-Method': 'POST', 'Access-Control-Request-Headers': 'content-type' } });
+    expect((await preflight('/api/v1/identity/customer/', ORIGIN)).headers.get('access-control-allow-origin')).toBe(ORIGIN);
+    expect((await preflight('/api/v1/widget/init/', ORIGIN)).headers.get('access-control-allow-origin')).toBe(ORIGIN);
+    for (const path of ['/api/v1/identity/staff/', '/api/v1/auth/login/', '/api/v1/support/', '/api/v1/integrations/me/']) {
+      expect((await preflight(path, ORIGIN)).headers.get('access-control-allow-origin'), path).toBeNull();
+    }
+    expect((await preflight('/api/v1/identity/customer/', 'https://evil.example')).headers.get('access-control-allow-origin')).toBeNull();
+  });
+
   test('assertion negatives: expired, replayed, wrong audience/issuer/integration, forged, tampered, alg confusion', async () => {
     const control = await customerExchange(S.keyA, mint({ sub: 'ctl' }));
     expect(control.status).toBe(200);
