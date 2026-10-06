@@ -46,7 +46,10 @@ test.describe('live sockets on the real stack', () => {
     const before = [count(8101), count(8102)];
     const visitors = [] as Awaited<ReturnType<typeof visitor>>[];
     const socks = [] as Awaited<ReturnType<typeof widgetSocket>>[];
-    for (let i = 0; i < 8; i++) { const v = await visitor(request); visitors.push(v); socks.push(await widgetSocket(request, v)); }
+    // the layer-4 balancer picks a worker at random per connection: open 8 sockets, then keep adding (bounded) until BOTH workers have
+    // taken at least one — "all eight landed on one worker" (0.8 %) must not fail a run that is about fan-out across workers
+    const spread = () => { const a = [count(8101), count(8102)]; return a[0] - before[0] > 0 && a[1] - before[1] > 0; };
+    for (let i = 0; i < 8 || (!spread() && i < 40); i++) { const v = await visitor(request); visitors.push(v); socks.push(await widgetSocket(request, v)); }
     const after = [count(8101), count(8102)];
     console.log(`[multiworker] new WS connections per worker: 8101 +${after[0] - before[0]}, 8102 +${after[1] - before[1]}`);
     expect(after[0] - before[0]).toBeGreaterThan(0);

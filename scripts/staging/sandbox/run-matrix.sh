@@ -54,15 +54,16 @@ stage 06-stack-health bash -c "for u in https://chat-stg.example.test/api/v1/hea
 # the REAL limiter is proven first (30 parallel bad logins -> 503s). The functional browser suite then runs with ONLY the login zone relaxed
 # (10r/m -> 600r/m): it legitimately performs >10 logins per minute from one address, which the production limit rightly refuses.
 stage 06b-login-rate-limit-enforced bash $H/loginlimit.sh
-relax_login_limit() { sed -i 's#zone=rastichat_login:10m rate=10r/m#zone=rastichat_login:10m rate=600r/m#' /etc/nginx/conf.d/rastichat-limits.conf; nginx -s stop; sleep 1; nginx; sleep 1; }
+# the functional browser suites run from ONE address and legitimately exceed both per-address limits (10 logins/min, 30 WebSocket handshakes/min):
+# each limit is proven enforced with the real config first (06b, 06c), then relaxed for those stages only and restored afterwards
+relax_login_limit() { sed -i -e 's#zone=rastichat_login:10m rate=10r/m#zone=rastichat_login:10m rate=600r/m#' -e 's#zone=rastichat_ws_connect:10m rate=30r/m#zone=rastichat_ws_connect:10m rate=1800r/m#' /etc/nginx/conf.d/rastichat-limits.conf; nginx -s stop; sleep 1; nginx; sleep 1; }
 real_login_limit() { cp $R/deploy/nginx/conf.d/rastichat-limits.conf /etc/nginx/conf.d/rastichat-limits.conf; nginx -s stop; sleep 1; nginx; sleep 1; }
-relax_login_limit; echo "login zone relaxed for the functional suite: $(grep -o 'zone=rastichat_login[^;]*' /etc/nginx/conf.d/rastichat-limits.conf)" >> $E/progress.log
+stage 06c-ws-connect-limiter-enforced bash $H/wslimit.sh
+relax_login_limit; echo "limit zones relaxed for the functional suites: $(grep -oE 'zone=rastichat_(login|ws_connect)[^;]*' /etc/nginx/conf.d/rastichat-limits.conf | tr '\n' ' ')" >> $E/progress.log
 reset_runtime   # logs the review stage reads start here (after the stack is healthy, so restart noise is not counted)
 stage 07-playwright-all-projects bash -c "PLAYWRIGHT_JSON_OUTPUT_NAME=$E/playwright-results.json $SB/pw.sh $E/playwright-raw.log --retries=0 --reporter=list,json --timeout=90000; cat $E/playwright-raw.log | tail -60; tail -1 $E/playwright-raw.log | grep -qx 'exit=0'"
 stage 07b-integration-contract-staging bash -c ". $SB/pw.env; cd $R/e2e && npx playwright test -c integration-staging/playwright.config.ts --reporter=list 2>&1 | tail -40; test \${PIPESTATUS[0]} -eq 0"
-sleep 65   # let the nginx WebSocket-connect limiter refill before the next browser suites
 stage 07c-reference-host-e2e-on-staging bash -c ". $SB/pw.env; export STACK=staging E2E_PYTHON=$PY PW_CHROMIUM=\$PW_CHROMIUM_PATH; cd $R && bash e2e/reference-host/run.sh --reporter=list 2>&1 | tail -40; test \${PIPESTATUS[0]} -eq 0"
-sleep 65
 stage 07d-rastisi-cross-system-e2e-on-staging bash -c ". $SB/pw.env; export STACK=staging E2E_PYTHON=$PY SI_PYTHON=${SI_PYTHON:?set SI_PYTHON (RastiSi venv python)} RASTISI_DIR=${RASTISI_DIR:?set RASTISI_DIR (RastiSi checkout at the PR tip)} PW_CHROMIUM=\$PW_CHROMIUM_PATH; cd $R && bash e2e/rastisi/run.sh --reporter=list 2>&1 | tail -40; test \${PIPESTATUS[0]} -eq 0"
 real_login_limit; echo "login zone restored to the repo value: $(grep -o 'zone=rastichat_login[^;]*' /etc/nginx/conf.d/rastichat-limits.conf)" >> $E/progress.log
 
