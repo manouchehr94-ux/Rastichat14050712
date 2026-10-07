@@ -34,7 +34,9 @@ python manage.py integration_create --slug my-app --name "My App" --platform-ext
     --scopes tenants:read,tenants:write,identity:customer,identity:staff,context:write
 ```
 
-Grant only the scopes you need: `tenants:*` (provisioning), `identity:customer`, `identity:staff`, `identity:platform`, `context:write`,
+The *platform* (your own organisation's account inside RastiChat) must already exist: it is created once by the operator in the Django admin
+(*Platforms*) or from a shell (`Platform.objects.get_or_create(external_id='<id>', defaults={'name': '<name>'})`, as in the Quickstart); `--platform-id <pk>`
+works too. Grant only the scopes you need: `tenants:*` (provisioning), `identity:customer`, `identity:staff`, `identity:platform`, `context:write`,
 `conversations:initiate`. Check them later with a signed `GET /api/v1/integrations/me/`.
 
 ## 2. Generate and register your signing key
@@ -191,6 +193,18 @@ attached to their verified identity only because the assertion proves who they a
 Everything the widget does is public API: `POST /identity/customer/` → `X-Widget-Session` → `POST /widget/start/` → `POST /widget/ws-ticket/` → WebSocket
 `/ws/v2/widget/<conversation>/` → `GET …/messages/` after each reconnect. [`HEADLESS.md`](HEADLESS.md) explains each step and
 [`../WEBSOCKET_PROTOCOL.md`](../WEBSOCKET_PROTOCOL.md) the socket; `examples/headless/headless.mjs` runs the whole thing.
+
+### Optional: platform ↔ tenant conversations
+Your own team can talk to each tenant, and tenant admins can ask your team for help, with the same engine (Contract §12):
+
+* **Tenant admin → platform:** a tenant Owner/Admin opens the *Support* page of the operator dashboard (`/admin/support`); your platform staff answer in the **platform dashboard**.
+* **Platform → tenant (tenant never wrote first):** a platform Owner/Admin picks the tenant in the platform dashboard ("new conversation with a tenant"), or your
+  backend calls `POST /api/v1/integrations/tenants/{tenant}/support-conversations/` (scope `conversations:initiate`, required `Idempotency-Key`,
+  body `{"initiator_user_id", "subject"?, "message"}`).
+* **Your platform staff** are provisioned like tenant staff but with `PUT /api/v1/integrations/platform/members/{user}/` (scope `identity:platform`) or a
+  `platform_staff` assertion (no `tenant` claim; `role` `owner`/`admin`/`operator` → platform owner/admin/support agent), delivered to
+  `<platform dashboard>/platform/sso#assertion=…`. The initiator of a host-initiated conversation must be an active owner/admin platform member that *your*
+  integration created.
 
 ## 14. Monitor integration health
 

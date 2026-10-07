@@ -21,6 +21,9 @@ itself is needed to integrate a new product.**
 | **Platform operator** | A platform dashboard and a support channel in both directions: tenant admins can ask the platform for help, and the platform can start a conversation with a tenant that never wrote first. |
 | **Host application** | Server-to-server provisioning and identity (Ed25519-signed JWTs), optional context push, widget or headless integration. |
 
+**Localisation.** The widget ships Persian and English strings with RTL/LTR layout (set per project). The operator and platform dashboards are
+currently **Persian (RTL) only** — there is no translation layer yet; see the deferred list.
+
 ## Concepts
 
 * **Platform** – the operator of the RastiChat deployment (and of the products that integrate with it).
@@ -50,7 +53,7 @@ Core chat data carries no host-specific columns. The mapping table is the only p
 
 ## Requirements
 
-Python 3.11 (what CI and the images use; newer 3.x also works), Node.js 20+ (22+ for the reference-host E2E and the headless example), PostgreSQL 15+, Redis 7+.
+Python 3.11 (what CI and the Docker images use; 3.12 is expected to work; **not 3.13** until the pinned `psycopg2-binary==2.9.9` is bumped), Node.js 20+ (22+ for the reference-host E2E and the headless example), PostgreSQL 15+, Redis 7+.
 PostgreSQL is the only supported database (there is no SQLite mode).
 
 ## Quick start

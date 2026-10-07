@@ -8,7 +8,7 @@ Everything here is local and synthetic. **None of the values below are secrets o
 
 | Tool | Version | Why |
 |---|---|---|
-| Python | 3.11 (newer 3.x also works) | backend |
+| Python | 3.11 (CI and Docker use it); 3.12 should work. Python 3.13 needs a newer `psycopg2-binary` than the pinned 2.9.9 (no wheel), so it is not part of the verified configuration | backend |
 | Node.js + npm | 20+ (22+ for the headless script and the reference-host E2E) | widget, dashboards, examples |
 | PostgreSQL | 15+ | the only supported database |
 | Redis | 7+ | channel layer, WebSocket tickets, replay protection, counters |
@@ -116,7 +116,7 @@ dashboard (3000) and stops them afterwards, so **stop the ones from steps 2–4 
 # from the repository root; needs PostgreSQL + Redis reachable (the DB_*/REDIS_* variables from step 2; the runner creates and drops its own
 # throw-away database `rc_e2e_ref`, so the database role must be allowed to CREATE DATABASE) and Node 22+
 ( cd packages/widget && npm ci ) && ( cd apps/operator-dashboard && npm ci )
-( cd e2e && npm ci && npx playwright install chromium )
+( cd e2e && npm ci && npx playwright install chromium )     # a browser matching the pinned Playwright version
 export PW_CHROMIUM="$(cd e2e && node -e "console.log(require('@playwright/test').chromium.executablePath())")"
 export PGPORT=$DB_PORT                     # the runner's psql calls use PGPORT; REDIS_PORT/DB_PORT are read by the backend
 E2E_PYTHON="$(which python)" e2e/reference-host/run.sh

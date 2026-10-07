@@ -61,7 +61,8 @@ consecutive runs of an isolated staging matrix (PostgreSQL, Redis, nginx with TL
 
 ### Intentionally deferred (not bugs)
 
-Host-bound webhooks/event delivery (designed, scope reserved), a published TypeScript SDK, a Prometheus exporter, and business-hours behaviour.
+Host-bound webhooks/event delivery (designed, scope reserved), a published TypeScript SDK, a Prometheus exporter, business-hours behaviour, and dashboard languages other
+than Persian.
 Each has a documented stand-in and an additive path: [`docs/integrations/V1_SCOPE_AND_DEFERRALS.md`](docs/integrations/V1_SCOPE_AND_DEFERRALS.md).
 
 ### Security baseline carried into this milestone
