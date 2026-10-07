@@ -47,7 +47,7 @@ Three public hostnames are expected (`BACKEND_DOMAIN`, `OPERATOR_DOMAIN`, `PLATF
 ## 3. Configuration
 
 All configuration is environment variables, validated at start-up: in `staging`/`production` the process **refuses to start** on
-`DEBUG=1`, a missing/short secret key, wildcard `ALLOWED_HOSTS`, missing `MONITORING_TOKEN`, or unsafe legacy-credential settings.
+`DEBUG=1`, a missing secret key, wildcard `ALLOWED_HOSTS`, missing `MONITORING_TOKEN`, or unsafe legacy-credential settings.
 
 * Templates (no secrets): `.env.production.example`, `.env.staging.example`, `.env.example` (local development).
 * Reference of every variable: [`runbooks/ENVIRONMENT_VARIABLES.md`](runbooks/ENVIRONMENT_VARIABLES.md).
@@ -67,8 +67,8 @@ python manage.py check --deploy --fail-level WARNING --tag security
 
 ## 4. TLS and nginx
 
-* Terminate TLS at nginx (`ssl-params.conf`; HSTS and security headers are set once, by nginx **and** Django without duplicating —
-  `proxy-params.conf` hides the upstream copies).
+* Terminate TLS at nginx (`ssl-params.conf`). Security headers (HSTS, `nosniff`, `Referrer-Policy`, `X-Frame-Options`) are sent by nginx;
+  `proxy-params.conf` hides the duplicate copies Django would add, so each header appears once.
 * `scripts/nginx/install-sites.sh <env file>` renders the templates, writes **only** RastiChat's own sites, runs `nginx -t` and
   never reloads on failure; `issue-certs.sh` requests certificates (HTTP-01) once DNS is correct; run `install-sites.sh` again afterwards
   to switch from the HTTP bootstrap config to full HTTPS. Use your own certificate tooling if you prefer; the templates only need
@@ -103,7 +103,7 @@ python manage.py check --deploy --fail-level WARNING --tag security
 6. **Check** `/api/v1/health/ready/` (all components up), then the smoke checks in [`OPERATIONS.md`](OPERATIONS.md).
 7. nginx changes are separate: `install-sites.sh` validates before reloading.
 
-`scripts/staging/deploy.sh <env file>` performs steps 1–7 for the Docker Compose layout; `scripts/staging/rollback.sh <git sha>` retags
+`scripts/staging/deploy.sh <env file>` does the equivalent (validate, back up, build, migrate once, start, health-check, smoke-test) for the Docker Compose layout; `scripts/staging/rollback.sh <git sha>` retags
 the previous images and restarts them. Both stop at the first failing step. If you use Kubernetes, Nomad or systemd instead, keep the
 same order: *migrate once → backend → schedulers → front ends*.
 
