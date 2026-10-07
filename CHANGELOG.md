@@ -34,6 +34,12 @@ consecutive runs of an isolated staging matrix (PostgreSQL, Redis, nginx with TL
 * **Documentation set**: README, Quickstart, Deployment, Security, Operations, Upgrade, Troubleshooting, API overview, WebSocket protocol, the integration contract and a
   new-project guide, widget embedding and pre-chat configuration.
 
+### Security
+
+* **Database password guard.** In `staging`/`production` the backend now refuses to start if the database password is missing, empty, or the published development value
+  (`DB_PASSWORD`, or the password inside `DATABASE_URL`). The development-only default `rastichat_secret` is used only when `ENVIRONMENT=development`.
+  **Operator action:** make sure staging/production set a real password before upgrading. Regression-tested (`ProductionLikeDatabasePasswordTests`).
+
 ### Changed
 
 * The widget starts conversations lazily by default for provisioned tenants; projects without configuration keep the original `on_load` behaviour.

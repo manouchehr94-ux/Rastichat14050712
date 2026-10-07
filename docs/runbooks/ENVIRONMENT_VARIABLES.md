@@ -23,11 +23,17 @@ unless noted otherwise.
 
 | Variable | Notes |
 |---|---|
-| `DATABASE_URL` | `postgres://user:pass@host:port/name` — takes priority over the `DB_*` vars below if set. |
-| `DB_NAME` / `DB_USER` / `DB_PASSWORD` / `DB_HOST` / `DB_PORT` | Used if `DATABASE_URL` is unset. Staging/prod require one or the other. |
+| `DATABASE_URL` | `postgres://user:pass@host:port/name` — takes priority over the `DB_*` vars below if set. In staging/production the URL **must contain a non-empty password** that is not the published development password. |
+| `DB_NAME` / `DB_USER` / `DB_PASSWORD` / `DB_HOST` / `DB_PORT` | Used if `DATABASE_URL` is unset. **Staging/production require `DB_HOST` and a non-empty `DB_PASSWORD`; there is no default there** — see below. |
 | `DB_CONN_MAX_AGE` | Default `60` (seconds) — persistent connections. |
 
 PostgreSQL is the only supported database (there is no SQLite mode).
+
+**Database password rule.** Only when `ENVIRONMENT=development` and `DB_PASSWORD` is unset does RastiChat use the published local default
+`rastichat_secret` (it matches the dev `docker-compose.yml`; never use it anywhere reachable). When `ENVIRONMENT` is `staging` or `production` the
+process **refuses to start** (`ImproperlyConfigured`) if the password is missing, empty/blank, or equal to that published value — whether it comes from
+`DB_PASSWORD` or from inside `DATABASE_URL`. The error never prints the value. Generate one with `scripts/generate-secrets.sh`
+(tests: `config.tests_settings_guardrails.ProductionLikeDatabasePasswordTests`).
 
 ## Redis
 

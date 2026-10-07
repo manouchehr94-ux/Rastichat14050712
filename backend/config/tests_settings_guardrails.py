@@ -275,3 +275,89 @@ class DeployTimeSecurityCheckTests(SimpleTestCase):
         result = run_check({}, extra_args=['--deploy', '--fail-level', 'WARNING'])
         self.assertNotEqual(result.returncode, 0)
         self.assertIn('drf_spectacular', result.stderr)
+
+
+DEV_DB_PASSWORD = 'rastichat_secret'  # the one published, development-only default (settings._DEV_DB_PASSWORD)  # gitleaks:allow
+DB_ENV_KEYS = ('DB_HOST', 'DB_USER', 'DB_PASSWORD', 'DB_NAME')
+
+
+def effective_db_password(env_overrides):
+    """Starts a fresh interpreter with the same environment `run_check` builds and prints the PASSWORD that
+    settings.DATABASES['default'] ended up with (so the test sees what Django would really connect with)."""
+    import os
+    env = {'PATH': os.environ.get('PATH', ''), 'DJANGO_SETTINGS_MODULE': 'config.settings'}
+    env.update(VALID_STAGING_ENV)
+    for k, v in env_overrides.items():
+        if v is None:
+            env.pop(k, None)
+        else:
+            env[k] = v
+    code = 'import django; django.setup(); from django.conf import settings; print(repr(settings.DATABASES["default"]["PASSWORD"]))'
+    return subprocess.run([sys.executable, '-c', code], cwd=BASE_DIR, env=env, capture_output=True, text=True, timeout=60)
+
+
+class ProductionLikeDatabasePasswordTests(SimpleTestCase):
+    """staging/production must never start with a missing, empty or published-default database password — in
+    DB_PASSWORD form and in DATABASE_URL form — while development keeps its explicit local default."""
+
+    def assert_refuses(self, overrides, mentions):
+        result = run_check(overrides)
+        self.assertNotEqual(result.returncode, 0, 'startup must be refused')
+        self.assertIn('ImproperlyConfigured', result.stderr)
+        self.assertIn(mentions, result.stderr)
+        self.assertNotIn(DEV_DB_PASSWORD, result.stderr + result.stdout, 'the error must not echo the default password')
+        return result
+
+    def test_baseline_with_an_explicit_password_starts(self):
+        self.assertEqual(run_check({}).returncode, 0)
+
+    def test_staging_missing_db_password_refuses_to_start(self):
+        self.assert_refuses({'DB_PASSWORD': None}, 'DB_PASSWORD')
+
+    def test_production_missing_db_password_refuses_to_start(self):
+        self.assert_refuses({'ENVIRONMENT': 'production', 'DB_PASSWORD': None}, 'DB_PASSWORD')
+
+    def test_empty_or_blank_db_password_refuses_to_start(self):
+        for value in ('', '   '):
+            with self.subTest(value=value):
+                self.assert_refuses({'DB_PASSWORD': value}, 'DB_PASSWORD')
+
+    def test_published_development_password_is_refused_in_staging_and_production(self):
+        for env in ('staging', 'production'):
+            with self.subTest(environment=env):
+                self.assert_refuses({'ENVIRONMENT': env, 'DB_PASSWORD': DEV_DB_PASSWORD}, 'published development password')
+
+    def test_missing_password_never_falls_back_silently(self):
+        # the effective password in a production-like process can only ever be the one that was configured
+        result = effective_db_password({'DB_PASSWORD': None})
+        self.assertNotEqual(result.returncode, 0)
+        self.assertNotIn(DEV_DB_PASSWORD, result.stdout)
+        ok = effective_db_password({'DB_PASSWORD': 'a-configured-password'})
+        self.assertEqual(ok.returncode, 0, ok.stderr)
+        self.assertEqual(ok.stdout.strip(), repr('a-configured-password'))
+
+    def test_database_url_without_a_password_is_refused(self):
+        for url in ('postgres://rastichat@db.invalid:5432/rastichat_db', 'postgres://rastichat:@db.invalid:5432/rastichat_db'):
+            with self.subTest(url=url):
+                self.assert_refuses({'DB_HOST': None, 'DB_PASSWORD': None, 'DATABASE_URL': url}, 'DATABASE_URL')
+
+    def test_database_url_with_the_published_password_is_refused(self):
+        self.assert_refuses({'DATABASE_URL': f'postgres://rastichat:{DEV_DB_PASSWORD}@db.invalid:5432/rastichat_db'},
+                            'published development password')
+
+    def test_database_url_with_a_real_password_starts(self):
+        result = run_check({'DB_HOST': None, 'DB_PASSWORD': None,
+                            'DATABASE_URL': 'postgres://rastichat:a-generated-password@db.invalid:5432/rastichat_db'})
+        self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_development_keeps_an_explicit_local_default(self):
+        dev = {'ENVIRONMENT': 'development', 'DEBUG': None, 'DB_PASSWORD': None}
+        self.assertEqual(run_check(dev).returncode, 0)
+        result = effective_db_password(dev)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stdout.strip(), repr(DEV_DB_PASSWORD))
+
+    def test_development_honours_an_explicit_password(self):
+        result = effective_db_password({'ENVIRONMENT': 'development', 'DEBUG': None, 'DB_PASSWORD': 'my-own-local-password'})
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stdout.strip(), repr('my-own-local-password'))

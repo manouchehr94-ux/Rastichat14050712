@@ -28,7 +28,9 @@ cd backend
 python -m venv .venv && . .venv/bin/activate
 pip install -r requirements.txt
 
-# Local development settings (never commit a real .env; see .env.example and docs/runbooks/ENVIRONMENT_VARIABLES.md)
+# Local development settings (never commit a real .env; see .env.example and docs/runbooks/ENVIRONMENT_VARIABLES.md).
+# The DB password below is the PUBLISHED, development-only value of the dev docker-compose.yml. It is accepted only because ENVIRONMENT=development:
+# staging/production refuse to start without a real, explicitly configured DB_PASSWORD.
 export ENVIRONMENT=development DEBUG=1
 export DB_HOST=localhost DB_PORT=5433 DB_NAME=rastichat_db DB_USER=rastichat DB_PASSWORD=rastichat_secret   # matches `docker compose up db`
 export REDIS_HOST=localhost REDIS_PORT=6380                                                                 # matches `docker compose up redis`

@@ -18,3 +18,5 @@
 
 **Design**
 * [`architecture.md`](architecture.md) · [`architecture/INTEGRATION_PLATFORM.md`](architecture/INTEGRATION_PLATFORM.md) · [`product/`](product/)
+
+**License:** Apache-2.0 — see [`../LICENSE`](../LICENSE).

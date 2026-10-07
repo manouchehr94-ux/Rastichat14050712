@@ -204,26 +204,50 @@ TEMPLATES = [
 # priority when set, matching common hosting-platform conventions; the
 # original DB_NAME/DB_USER/... variables remain supported underneath it for
 # the existing dev docker-compose.yml and any script that already sets them.
-# SQLite is never used outside the `development` default — staging and
-# production always require an explicit DATABASE_URL or DB_* set pointing
-# at a real Postgres instance (the check below just enforces that a host
-# other than the bare local default was actually configured).
+# PostgreSQL is the only supported database (there is no SQLite mode). Staging and
+# production always require an explicit DATABASE_URL or DB_* set pointing at a
+# real Postgres instance AND an explicit database password (enforced below).
 # ---------------------------------------------------------------------------
+# The ONLY password RastiChat will ever fall back to, and only in `development`. It is public (it is in the repository, .env.example and the
+# dev docker-compose.yml), so staging/production refuse to start without an explicit DB_PASSWORD (or a password inside DATABASE_URL) and also
+# refuse this well-known value: a database reachable with a published password is not a configuration, it is an incident.
+_DEV_DB_PASSWORD = 'rastichat_secret'
+
+
+def _require_real_db_password(password, where):
+    if not (password or '').strip():
+        raise ImproperlyConfigured(
+            f'{where} must carry a non-empty database password when ENVIRONMENT is staging or production. '
+            'Set DB_PASSWORD (or put the password in DATABASE_URL); there is no default in these environments '
+            '(generate one with scripts/generate-secrets.sh).'
+        )
+    if password == _DEV_DB_PASSWORD:
+        raise ImproperlyConfigured(
+            f'{where} uses the published development password; choose a generated password when ENVIRONMENT is '
+            'staging or production (scripts/generate-secrets.sh).'
+        )
+
+
 _database_url = os.environ.get('DATABASE_URL')
 if _database_url:
     DATABASES = {'default': dj_database_url.parse(_database_url, conn_max_age=60)}
+    if IS_PRODUCTION_LIKE:
+        _require_real_db_password(DATABASES['default'].get('PASSWORD'), 'DATABASE_URL')
 else:
     if IS_PRODUCTION_LIKE and not os.environ.get('DB_HOST'):
         raise ImproperlyConfigured(
             'DATABASE_URL (or DB_HOST/DB_NAME/DB_USER/DB_PASSWORD) must be set when '
             'ENVIRONMENT is staging or production.'
         )
+    if IS_PRODUCTION_LIKE:
+        _require_real_db_password(os.environ.get('DB_PASSWORD'), 'DB_PASSWORD')
     DATABASES = {
         'default': {
             'ENGINE': 'django.db.backends.postgresql',
             'NAME': os.environ.get('DB_NAME', 'rastichat_db'),
             'USER': os.environ.get('DB_USER', 'rastichat'),
-            'PASSWORD': os.environ.get('DB_PASSWORD', 'rastichat_secret'),
+            # development only: an explicit, public, local-only default (see _DEV_DB_PASSWORD above)
+            'PASSWORD': os.environ['DB_PASSWORD'] if IS_PRODUCTION_LIKE else os.environ.get('DB_PASSWORD', _DEV_DB_PASSWORD),
             'HOST': os.environ.get('DB_HOST', 'localhost'),
             'PORT': os.environ.get('DB_PORT', '5432'),
             'CONN_MAX_AGE': int(os.environ.get('DB_CONN_MAX_AGE', 60)),

@@ -116,7 +116,10 @@ Guests keep working only if the project allows them; on signed-in-only projects 
 ## Deployment and start-up
 
 * The process refuses to start with `ImproperlyConfigured`: read the message — it names the variable (`DEBUG=1` in production, missing
-  `MONITORING_TOKEN`, wildcard `ALLOWED_HOSTS`, …). `python manage.py check --deploy --fail-level WARNING --tag security` lists the same issues.
+  `MONITORING_TOKEN`, wildcard `ALLOWED_HOSTS`, …).
+* `DB_PASSWORD must carry a non-empty database password…` / `DATABASE_URL uses the published development password`: in staging/production the database
+  password is mandatory and cannot be empty or the well-known development value. Set `DB_PASSWORD` (or a password inside `DATABASE_URL`) to a generated secret
+  (`scripts/generate-secrets.sh`); for the Docker Compose layout the same value initialises the PostgreSQL container. Locally, use `ENVIRONMENT=development`. `python manage.py check --deploy --fail-level WARNING --tag security` lists the same issues.
 * `ready` is `503` after deploy: run migrations; check `components` (database / redis / migrations).
 * Dashboard shows wrong API host: `NEXT_PUBLIC_*` are baked at build time → rebuild.
 * "Failed to load conversations" under normal load: nginx per-address limit shared by a NAT/CDN — see [`OPERATIONS.md`](OPERATIONS.md) §7.
