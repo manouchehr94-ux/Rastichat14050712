@@ -87,7 +87,7 @@ ALLOWED_HOSTS = _env_list('ALLOWED_HOSTS', default='*' if not IS_PRODUCTION_LIKE
 if IS_PRODUCTION_LIKE and (not ALLOWED_HOSTS or '*' in ALLOWED_HOSTS):
     raise ImproperlyConfigured(
         'ALLOWED_HOSTS must be a non-empty, non-wildcard comma-separated list of hostnames '
-        'when ENVIRONMENT is staging or production (e.g. "chat-staging.rastisi.ir").'
+        'when ENVIRONMENT is staging or production (e.g. "chat-staging.example.com").'
     )
 # backend/Dockerfile.prod's own HEALTHCHECK (and docker-compose.staging.yml's
 # depends_on: backend: condition: service_healthy, which operator-dashboard/
@@ -106,7 +106,7 @@ CSRF_TRUSTED_ORIGINS = _env_list('CSRF_TRUSTED_ORIGINS')
 if IS_PRODUCTION_LIKE and not CSRF_TRUSTED_ORIGINS:
     raise ImproperlyConfigured(
         'CSRF_TRUSTED_ORIGINS must be set when ENVIRONMENT is staging or production '
-        '(e.g. "https://operator-chat-staging.rastisi.ir,https://platform-chat-staging.rastisi.ir").'
+        '(e.g. "https://operator-chat-staging.example.com,https://platform-chat-staging.example.com").'
     )
 
 # The widget sends its session credential in this header (instead of the URL) —

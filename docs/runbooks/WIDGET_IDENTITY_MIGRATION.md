@@ -30,7 +30,7 @@ session for that customer's visitor and could read their conversation history. N
    the time needed (in staging/production this additionally requires `WIDGET_UNVERIFIED_EXTERNAL_ID_ACK=accept-spoofable-customer-identity`,
    and the security deploy gate reports `visitors.W001` while it is on), watch the warning log (`widget init used legacy unverified external_id lookup`), and treat that
    deployment as spoofable meanwhile.
-3. Move to signed identity assertions (RastiSi server issues a short-lived signed token; chat validates signature, audience,
+3. Move to signed identity assertions (the host application's server issues a short-lived signed token; chat validates signature, audience,
    expiry and one-time use, then maps the store and customer). Then `Visitor.external_id` is set only from a verified claim,
    scoped per store (`<store_public_id>:<customer_id>`), and guest→customer merge is explicit and idempotent.
 4. Remove the legacy flag after step 3.

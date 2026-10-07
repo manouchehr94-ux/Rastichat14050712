@@ -3,7 +3,7 @@
 **What this is.** The full verification matrix for a release candidate, runnable in a single throw-away Linux box/container that has no
 Docker daemon: local nginx with TLS on `*.example.test` names (mapped to 192.0.2.2 in `/etc/hosts`, signed by a local CA), its own
 PostgreSQL and Redis, two Daphne workers behind a layer-4 balancer, the two Next.js dashboards, and the Playwright suite in
-`e2e/staging-django52/`. Nothing here talks to a real host: no VPS, no production DB/nginx, no RastiSi. When a script says "apply to the
+`e2e/staging-django52/`. Nothing here talks to a real host: no VPS, no production DB/nginx, no live host application. When a script says "apply to the
 live nginx config and reload" it means the nginx *inside this sandbox*.
 
 **What is sandbox-only (everything in this directory).** These scripts are tied to the box layout (ports 8100-8102/3100/3101, the
@@ -20,7 +20,9 @@ when the hooks are absent.
 export SANDBOX_DIR=/tmp/sbx VENV=/tmp/venv           # venv = python with backend/requirements.txt (+ requirements-dev.txt)
 bash scripts/staging/sandbox/setup.sh                # once: CA/TLS, hosts, DB, env files, dashboards, nginx, seed, test integrations
 bash scripts/staging/sandbox/start.sh                # 2 Daphne workers + balancer + dashboards + widget server + nginx
-SI_PYTHON=<rastisi venv python> RASTISI_DIR=<rastisi checkout at the PR tip> bash scripts/staging/sandbox/run-matrix.sh <label> [soak-minutes]
+bash scripts/staging/sandbox/run-matrix.sh <label> [soak-minutes]
+# optional stage 07d (a real host adapter, needs that host's own checkout and venv):
+#   SI_PYTHON=<host venv python> RASTISI_DIR=<host checkout> bash scripts/staging/sandbox/run-matrix.sh <label> [soak-minutes]
 ```
 `setup.sh` is idempotent and reproducible. Two details learned the hard way: (1) the `*.example.test` names resolve to **192.0.2.2** (an alias
 on `lo`), not 127.0.0.1 — recent Chromium blocks requests from a "public" page (the fake embedding origins) to loopback, which hangs every browser
@@ -34,8 +36,8 @@ test that embeds the widget; (2) Chromium trusts the sandbox CA through the NSS 
 | 06 health, 06b login limiter, 06c WebSocket-handshake limiter | stack up behind nginx TLS; each real per-address limit is proven enforced before it is relaxed for the browser suites (they run from ONE address) and restored afterwards |
 | 07 `staging-django52` Playwright (3 device projects) | WS tickets, reconnect + history resync, allowed domains/CORS/Origin, visitor sessions, attachments, live multi-worker + revocation, RTL/mobile |
 | **07b `integration-staging`** | Integration Contract over real HTTPS/WSS behind nginx: idempotent provisioning, expired/replayed/wrong-audience/issuer/integration/forged/tampered/alg-confusion assertions, disabled integration, tenant + multi-store isolation, tenant admin ⇄ platform, platform → tenant first message (idempotent), close/reopen, WebSocket across both workers, live revocation, suspend/archive |
-| **07c reference host on staging** (`STACK=staging e2e/reference-host/run.sh`) | a non-RastiSi host: icon-only / one-question / structured pre-chat, guest + trusted customer, staff SSO, headless path, mobile |
-| **07d RastiSi cross-system on staging** (`STACK=staging e2e/rastisi/run.sh`) | the three RastiSi directions, two stores, multi-store owner, operator without admin rights, wrong store, flag off, revocation — the RastiSi adapter talking to the staging RastiChat over TLS |
+| **07c reference host on staging** (`STACK=staging e2e/reference-host/run.sh`) | a generic host that is not any real product: icon-only / one-question / structured pre-chat, guest + trusted customer, staff SSO, headless path, mobile |
+| **07d host-adapter cross-system on staging** (optional; `STACK=staging e2e/rastisi/run.sh`, only when `RASTISI_DIR` is set) | the three conversation directions, two stores, multi-store owner, operator without admin rights, wrong store, flag off, revocation — the first real host adapter talking to the staging RastiChat over TLS |
 | 07e cool-down, 08 soak, 09 log review, 10 rollback rehearsal, 11 final health | memory/ticket-key/unexpected-close checks; no asyncio/event-loop errors, no credentials in any log; roll back to the previous release and forward again |
 
 ## State directory

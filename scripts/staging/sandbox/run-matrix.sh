@@ -1,8 +1,8 @@
 #!/bin/bash
-# Full verification matrix of the COMBINED integration-platform build (A+B+C+D+E+H, RastiSi adapter PR as a separate checkout) on the isolated
+# Full verification matrix of a release candidate (the optional host-adapter stage 07d needs a separate checkout, see RASTISI_DIR) on the isolated
 # sandbox staging stack (this container only:
 # local nginx + TLS on example.test names, own PostgreSQL/Redis, 2 Daphne workers behind a layer-4 balancer, Next dashboards).
-# Nothing here reaches any real host: no VPS, no chatchat.rastisi.ir, no production DB/nginx, no RastiSi.
+# Nothing here reaches any real host: no VPS, no production DB/nginx, no live host application.
 # usage: run-matrix.sh <run-label> [soak-minutes]      evidence -> $SANDBOX_DIR/evidence/final/<run-label>/
 SB="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"; S=${SANDBOX_DIR:?set SANDBOX_DIR, see README.md}; R=$(cd "$SB/../../.." && pwd); PY=${VENV:-/tmp/venv}/bin/python
 RUN=${1:?run label}; SOAK=${2:-30}; E=$S/evidence/final/$RUN; mkdir -p $E
@@ -64,7 +64,9 @@ reset_runtime   # logs the review stage reads start here (after the stack is hea
 stage 07-playwright-all-projects bash -c "PLAYWRIGHT_JSON_OUTPUT_NAME=$E/playwright-results.json $SB/pw.sh $E/playwright-raw.log --retries=0 --reporter=list,json --timeout=90000; cat $E/playwright-raw.log | tail -60; tail -1 $E/playwright-raw.log | grep -qx 'exit=0'"
 stage 07b-integration-contract-staging bash -c ". $SB/pw.env; cd $R/e2e && npx playwright test -c integration-staging/playwright.config.ts --reporter=list 2>&1 | tail -40; test \${PIPESTATUS[0]} -eq 0"
 stage 07c-reference-host-e2e-on-staging bash -c ". $SB/pw.env; export STACK=staging E2E_PYTHON=$PY PW_CHROMIUM=\$PW_CHROMIUM_PATH; cd $R && bash e2e/reference-host/run.sh --reporter=list 2>&1 | tail -40; test \${PIPESTATUS[0]} -eq 0"
+if [ -n "${RASTISI_DIR:-}" ]; then  # optional stage: the first real host adapter needs its own checkout (RASTISI_DIR) and venv (SI_PYTHON)
 stage 07d-rastisi-cross-system-e2e-on-staging bash -c ". $SB/pw.env; export STACK=staging E2E_PYTHON=$PY SI_PYTHON=${SI_PYTHON:?set SI_PYTHON (RastiSi venv python)} RASTISI_DIR=${RASTISI_DIR:?set RASTISI_DIR (RastiSi checkout at the PR tip)} PW_CHROMIUM=\$PW_CHROMIUM_PATH; cd $R && bash e2e/rastisi/run.sh --reporter=list 2>&1 | tail -40; test \${PIPESTATUS[0]} -eq 0"
+else echo "07d skipped: RASTISI_DIR not set (optional host-adapter stage)" >> $E/progress.log; fi
 real_login_limit; echo "login zone restored to the repo value: $(grep -o 'zone=rastichat_login[^;]*' /etc/nginx/conf.d/rastichat-limits.conf)" >> $E/progress.log
 
 # ---------------------------------------------------------------- soak (alone on the stack; 120 s cool-down so the nginx WebSocket-connect limiter

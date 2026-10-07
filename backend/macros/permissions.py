@@ -56,7 +56,7 @@ def can_create_macro(user, workspace, visibility, *, team=None):
         return False
     if visibility == Macro.Visibility.PRIVATE:
         # "create private macros only if explicitly enabled" — enabled by
-        # default for any workspace operator; see docs/knowledge_base_and_macros.md
+        # default for any workspace operator; see docs/architecture/KNOWLEDGE_BASE_AND_MACROS_REFERENCE.md
         # for the deliberate simplification (no per-workspace policy model
         # in this phase).
         return True

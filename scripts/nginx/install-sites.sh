@@ -42,7 +42,7 @@ echo
 # shellcheck disable=SC1090
 set -a; source "$ENV_FILE"; set +a
 
-: "${BACKEND_DOMAIN:?BACKEND_DOMAIN must be set in $ENV_FILE (e.g. chat-staging.rastisi.ir)}"
+: "${BACKEND_DOMAIN:?BACKEND_DOMAIN must be set in $ENV_FILE (e.g. chat-staging.example.com)}"
 : "${OPERATOR_DOMAIN:?OPERATOR_DOMAIN must be set in $ENV_FILE}"
 : "${PLATFORM_DOMAIN:?PLATFORM_DOMAIN must be set in $ENV_FILE}"
 BACKEND_PORT="${BACKEND_PORT:-8100}"

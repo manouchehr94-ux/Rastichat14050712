@@ -13,8 +13,8 @@ unless noted otherwise.
 | `DJANGO_SECRET_KEY` | yes | none (dev falls back to a fixed insecure key) | Generate with `scripts/generate-secrets.sh`. `SECRET_KEY` also accepted (back-compat with the dev `docker-compose.yml`). |
 | `DJANGO_SETTINGS_MODULE` | no | `config.settings` | Same module for every environment — behavior is env-var-driven, not file-per-environment. |
 | `ALLOWED_HOSTS` | yes | `*` in dev | Comma-separated hostnames, no scheme. Refuses `*` or empty in staging/prod. |
-| `CSRF_TRUSTED_ORIGINS` | yes | empty | Comma-separated, full scheme+host (e.g. `https://operator-chat-staging.rastisi.ir`). |
-| `CORS_ALLOWED_ORIGINS` | yes | empty (falls back to allow-all in dev only) | Comma-separated, full scheme+host — every page that embeds the Widget or calls the API from a browser, including the Rastisi storefront. |
+| `CSRF_TRUSTED_ORIGINS` | yes | empty | Comma-separated, full scheme+host (e.g. `https://operator-chat-staging.example.com`). |
+| `CORS_ALLOWED_ORIGINS` | yes | empty (falls back to allow-all in dev only) | Comma-separated, full scheme+host — every page that embeds the Widget or calls the API from a browser, including every host-application site that embeds the widget. |
 | `TIME_ZONE` | no | `UTC` | |
 | `DJANGO_LOG_LEVEL` | no | `INFO` | Applies to this app's own loggers only, not third-party libraries (see `common/middleware.py`/settings `LOGGING`). |
 | `ADMIN_URL` | no | `admin/` | Move the Django admin off the well-known path if desired. |
@@ -27,7 +27,7 @@ unless noted otherwise.
 | `DB_NAME` / `DB_USER` / `DB_PASSWORD` / `DB_HOST` / `DB_PORT` | Used if `DATABASE_URL` is unset. Staging/prod require one or the other. |
 | `DB_CONN_MAX_AGE` | Default `60` (seconds) — persistent connections. |
 
-SQLite is never used outside test runs. Postgres only.
+PostgreSQL is the only supported database (there is no SQLite mode).
 
 ## Redis
 

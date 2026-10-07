@@ -45,6 +45,12 @@ default) and opens a chat panel. **Everything about how it looks and behaves is 
   assertion once and carries on. `bootstrap` is called at most once per page load plus once per renewal.
 * **Never** put an assertion, user id or role in markup, query strings or `localStorage` yourself.
 
+## Allowed domains
+Only pages whose origin matches the project's **allowed domains** can create a session or open a socket (`verified_domains` when the tenant is
+provisioned by an integration; editable by the tenant's admin). Entries are exact hosts (`shop.example.com`), host+port (`localhost:3000`) or a
+sub-domain wildcard (`*.example.com`, which does **not** match `example.com` itself). A refused origin answers `403 origin_not_allowed` and the widget
+stays hidden — see [`../TROUBLESHOOTING.md`](../TROUBLESHOOTING.md). It protects against *other websites* using your project key; it is not authentication.
+
 ## What the project configures (remote)
 Launcher (icon / icon+text, label, tooltip, icon, colour, position, offsets, greeting bubble, auto-open, mobile
 full-screen), start behaviour, pre-chat form, identity policy (guests allowed / signed-in only), locale and direction,
@@ -91,4 +97,4 @@ No `frame-src` is needed (the widget is not an iframe).
 Build your own UI against the same REST + WebSocket protocol (OpenAPI at `/api/schema/`): `POST /identity/customer/` (or
 `/widget/init/` for guests) → `X-Widget-Session` header → `POST /widget/start/` → `POST /widget/ws-ticket/` → WebSocket
 `/ws/v2/widget/<conversation>/` with `{"type":"auth","ticket":…}` as the first frame. Re-fetch
-`GET /widget/conversations/<id>/messages/` after every (re)connect. See `docs/runbooks/WS_TICKETS_AND_URL_CREDENTIALS.md`.
+`GET /widget/conversations/<id>/messages/` after every (re)connect. See [`../WEBSOCKET_PROTOCOL.md`](../WEBSOCKET_PROTOCOL.md) and [`../integrations/HEADLESS.md`](../integrations/HEADLESS.md).

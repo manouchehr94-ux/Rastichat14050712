@@ -2,11 +2,25 @@
 
 Everything a host application needs to integrate RastiChat — **without reading RastiChat or any other host's source**.
 
-Each section carries a status: **[implemented]** (code + tests in this repository), **[specified]** (the contract is
-fixed here; implementation lands in the named slice). Sections marked *specified* may be refined only additively.
+Each section carries a status: **[implemented]** (code and automated tests in this repository) or **[designed, deferred]** (the contract is
+fixed here but intentionally not built in v1 — §13). Deferred sections may be refined only additively when they are built.
+
+This document is host-agnostic: it names no particular product and can be followed by any application. A step-by-step walkthrough is
+[`NEW_PROJECT_GUIDE.md`](NEW_PROJECT_GUIDE.md); a runnable example is [`examples/reference-host`](../../examples/reference-host/).
 
 Conventions: JSON over HTTPS; times are ISO-8601 UTC; "tenant" = one customer organisation of the host (a store, an
 account, an organisation…); "platform" = the host's own operating team.
+
+**Glossary — how host concepts map to RastiChat concepts**
+
+| Term | Meaning |
+|---|---|
+| **Integration** | one registered host application: a `slug`, a set of permitted *scopes* and one or more public *keys*. Registered by the RastiChat operator (CLI/admin), never by the host over the API |
+| **Tenant** (host side: "external tenant id") | one customer organisation of the host. In RastiChat it is a **workspace** (the inbox, staff, queues, SLA, automations…) reached only through an explicit per-integration *mapping* `(integration, external tenant id) → workspace + default project` |
+| **Project** | a widget deployment inside a workspace; identified publicly by its `project_public_key`. Holds allowed domains, launcher and pre-chat configuration. A mapping creates exactly one default project |
+| **External identity** | a person known to the host (`sub`, opaque). RastiChat stores a pseudonymous link `(integration, sub)` → a RastiChat *visitor* (customers) or *user* (staff); it never stores credentials or looks anything up in the host's database |
+| **Platform** | the operator organisation that owns the RastiChat deployment/integration; its staff use the platform dashboard and the platform↔tenant support channel |
+| **Assertion** | a short-lived, single-use, host-signed statement "this browser is person *sub*, actor *customer*/*tenant_staff*/*platform_staff*, in tenant *t*, role *r*" (§7) |
 
 ---
 ## 1. Overview
@@ -129,7 +143,7 @@ throttled. Redis unavailable → `503 replay_store_unavailable` (fail closed).
 | RastiChat-admin-managed | routing, queues, teams, canned replies, macros, SLA, automations, hand-added domains | never touched |
 | Project-managed | launcher, branding, pre-chat (§9) | integration may only seed |
 
-## 7. Identity assertions  **[implemented — PR B]**
+## 7. Identity assertions  **[implemented]**
 A host backend asserts "this browser belongs to this person, in this tenant, in this role". The browser then
 exchanges the assertion for a RastiChat session. Browser-supplied ids are never trusted.
 
@@ -180,7 +194,7 @@ merges anything; an assertion without the guest credential attaches nothing; a g
 touched; if the verified visitor already has an open conversation the guest's open one stays with the retired guest
 record (never two open threads for one visitor).
 
-## 8. Deprovisioning & revocation  **[implemented — tenant/key/integration (PR A), user/membership/customer (PR B)]**
+## 8. Deprovisioning & revocation  **[implemented]**
 | Event | Call (scope) | Effect |
 |---|---|---|
 | tenant deactivated | `PUT …/tenants/{t}/ {"status":"suspended"}` (`tenants:write`) | workspace+project inactive; visitor sessions revoked; staff REST/WS refuse on next check |
@@ -199,7 +213,7 @@ untouched even with identical ids. History (conversations, messages, attachments
 is a separate retention operation. Known limitation: conversations still *assigned* to a removed member keep that
 assignee until an admin reassigns them.
 
-## 9. Widget configuration & pre-chat  **[implemented — PR C]**
+## 9. Widget configuration & pre-chat  **[implemented]**
 `GET /api/v1/widget/config/?project_key=<public key>` (public, Origin-checked) returns a versioned document (shape abridged; the normative schema is in `docs/widget/PRE_CHAT_CONFIGURATION.md`):
 ```json
 {"version": 1,
@@ -218,7 +232,7 @@ question / structured form — pure configuration. Full schema, limits and examp
 An integration may seed it at provisioning with `defaults.widget` (applied once; see §6 ownership). Projects that
 never set a configuration keep the original widget behaviour.
 
-## 10. Widget & headless clients  **[implemented — widget PR C; reference host PR D; headless: `HEADLESS.md`]**
+## 10. Widget & headless clients  **[implemented]**
 * Widget: `RastiChat.init({project, bootstrap: async () => fetchAssertionFromMyBackend()})` — see `docs/widget/EMBEDDING.md`.
   The project key is public; identity only via `bootstrap`; no long-lived credential in markup.
 * Headless: the same REST + WebSocket protocol the widget uses (OpenAPI at `/api/schema/`); see `HEADLESS.md` and the runnable
@@ -250,7 +264,7 @@ PUT /api/v1/integrations/tenants/shop-1/contexts/cust-42/
   `INTEGRATION_PLATFORM.md`.
 * **Audit:** the audit trail records *which keys* were written, never the values.
 
-## 12. Platform ↔ tenant conversations  **[implemented — PR E]**
+## 12. Platform ↔ tenant conversations  **[implemented]**
 One conversation engine, two directions, generic platform/tenant semantics ("platform" = the operator of the integration's
 `Platform`; "tenant" = a mapped workspace):
 
@@ -280,7 +294,7 @@ One conversation engine, two directions, generic platform/tenant semantics ("pla
   this tenant. Audit: `support_conversation_created|closed|reopened` (identifiers only).
 Operator tooling: `manage.py integration_purge_idempotency --older-than-hours 48` (cron).
 
-## 13. Webhooks / events  **[designed; delivery deliberately deferred — see `V1_SCOPE_AND_DEFERRALS.md`]**
+## 13. Webhooks / events  **[designed, deferred — see `V1_SCOPE_AND_DEFERRALS.md`]**
 The scope `events:receive` is reserved. The design below is the contract future delivery will follow; **v1 does not send events.**
 Signed (Ed25519, RastiChat deployment key published at `/.well-known/rastichat-jwks.json`), at-least-once, bounded
 exponential backoff, `event_id` for consumer idempotency, `version`, tenant + integration identity, minimal PII, no
@@ -299,11 +313,13 @@ timeouts (SSRF hardening). Events: `conversation.created|assigned|closed|reopene
 5. Treat chat as optional UI; fail closed on assertion errors (show guest mode or hide the launcher).
 
 ## 16. Checklist: integrate a new application
+(Expanded with examples in [`NEW_PROJECT_GUIDE.md`](NEW_PROJECT_GUIDE.md).)
 1. Generate an Ed25519 keypair; send the **public** key to the RastiChat operator → `kid`.
 2. Implement a `sign()` helper (§3.2) and `PUT` your first tenant (§6). Store `project_public_key`.
 3. Add allowed domains (`verified_domains`).
 4. Configure launcher/pre-chat (§9).
 5. Add a backend endpoint that returns a fresh identity assertion for the logged-in user (§7).
 6. Embed the widget (§10) — or use the headless client.
-7. Subscribe to events if needed (§13).
-8. Wire user/tenant lifecycle to §8.
+7. Optionally push customer context (§11) and, for platform operators, use platform↔tenant conversations (§12).
+8. Wire user/tenant lifecycle to §8, and plan key rotation (§3.1).
+Webhook/event delivery (§13) is **not available in v1**: do not design around being called back.

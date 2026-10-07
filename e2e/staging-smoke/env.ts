@@ -14,11 +14,11 @@ function required(name: string): string {
   return value;
 }
 
-export const BACKEND_URL = required('SMOKE_BACKEND_URL'); // e.g. https://chat-staging.rastisi.ir
-export const OPERATOR_URL = required('SMOKE_OPERATOR_URL'); // e.g. https://operator-chat-staging.rastisi.ir
-export const PLATFORM_URL = required('SMOKE_PLATFORM_URL'); // e.g. https://platform-chat-staging.rastisi.ir
-export const WIDGET_URL = required('SMOKE_WIDGET_URL'); // e.g. https://chat-staging.rastisi.ir/widget.js
-export const WS_URL = required('SMOKE_WS_URL'); // e.g. wss://chat-staging.rastisi.ir/ws
+export const BACKEND_URL = required('SMOKE_BACKEND_URL'); // e.g. https://chat-staging.example.com
+export const OPERATOR_URL = required('SMOKE_OPERATOR_URL'); // e.g. https://operator-chat-staging.example.com
+export const PLATFORM_URL = required('SMOKE_PLATFORM_URL'); // e.g. https://platform-chat-staging.example.com
+export const WIDGET_URL = required('SMOKE_WIDGET_URL'); // e.g. https://chat-staging.example.com/widget.js
+export const WS_URL = required('SMOKE_WS_URL'); // e.g. wss://chat-staging.example.com/ws
 export const PROJECT_KEY = required('SMOKE_PROJECT_KEY'); // Project.public_key from seed_staging_data's output
 
 // Credentials from seed_staging_data's one-time output (see

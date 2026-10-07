@@ -5,7 +5,7 @@
 # The Widget script (/widget.js, /widget/<version>/widget.js) is also
 # served from this SAME domain by proxying to the widget's own static-
 # Nginx container — kept on the backend's domain rather than inventing a
-# fourth "Rastisi host domain" beyond the three the spec names.
+# fourth "host application domain" beyond the three the spec names.
 
 server {
     listen 80;

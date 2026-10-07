@@ -15,17 +15,17 @@ also only ever included for a caller presenting the same
 still sees `up: true/false`, just not *why* it's false.
 
 ```bash
-curl -fsS https://chat-staging.rastisi.ir/api/v1/health/ready/ | python3 -m json.tool
+curl -fsS https://chat-staging.example.com/api/v1/health/ready/ | python3 -m json.tool
 # With detail, as an authorized monitoring caller:
 curl -fsS -H "X-Monitoring-Token: $MONITORING_TOKEN" \
-  https://chat-staging.rastisi.ir/api/v1/health/ready/ | python3 -m json.tool
+  https://chat-staging.example.com/api/v1/health/ready/ | python3 -m json.tool
 ```
 
 ## Reading `/health/monitoring/`
 
 ```bash
 curl -fsS -H "X-Monitoring-Token: $MONITORING_TOKEN" \
-  https://chat-staging.rastisi.ir/api/v1/health/monitoring/ | python3 -m json.tool
+  https://chat-staging.example.com/api/v1/health/monitoring/ | python3 -m json.tool
 ```
 
 ```json
@@ -126,7 +126,7 @@ bodies are ever logged (see `common/middleware.py`).
 ## Load baseline
 
 ```bash
-BASE_URL=https://chat-staging.rastisi.ir WS_URL=wss://chat-staging.rastisi.ir/ws \
+BASE_URL=https://chat-staging.example.com WS_URL=wss://chat-staging.example.com/ws \
 PROJECT_KEY=<Project.public_key> VISITOR_COUNT=50 node scripts/staging/load-baseline.mjs
 ```
 

@@ -1,15 +1,15 @@
 # RastiChat Integration Platform — architecture
 
-> Status: living document. **Implemented** = merged-ready code with tests in the PR named; **Specified** = contract
-> text exists, code lands in the named PR. See the status table at the end.
+> Status: living document. **Implemented** = code with automated tests in this repository; **Deferred by design** = specified or
+> reserved but intentionally not built (see `docs/integrations/V1_SCOPE_AND_DEFERRALS.md`). See the status table at the end.
 
 ## Principle
 
 > RastiChat is a standalone, reusable, multi-tenant communication platform. Host applications integrate through
-> stable generic contracts. RastiSi is an adapter, not the domain model of RastiChat.
+> stable generic contracts. No host product is part of the domain model of RastiChat.
 
-Everything below is host-agnostic. The words "RastiSi", "store", "order" appear only in `docs/integrations/RASTISI.md`
-and in the RastiSi repository. The acceptance test for every design decision is: *could an unrelated SaaS integrate
+Everything below is host-agnostic. Product-specific words ("store", "order", a particular host's name) appear only in the optional
+case study `docs/case-studies/RASTISI.md` and in that host's own repository. The acceptance test for every design decision is: *could an unrelated SaaS integrate
 tomorrow using only these documents and configuration, with no change to RastiChat core?*
 
 ## Concept map
@@ -60,7 +60,7 @@ be replayed (single use), re-targeted at another endpoint, or combined with anot
 
 ### D4. Least privilege via scopes
 `Integration.scopes` is what the integration may ever do; `IntegrationKey.scopes` narrows per key. A request is
-authorised for the intersection. (`tenants:read|write` now; `identity:*`, `conversations:initiate`, `events:receive` reserved.)
+authorised for the intersection. (`tenants:read|write`, `identity:customer|staff|platform`, `conversations:initiate`, `context:write`; `events:receive` is reserved for the deferred webhook delivery.)
 
 ### D5. Provisioning is an idempotent PUT with explicit field ownership
 See "Configuration ownership" below. Repeating a call never duplicates; omitted fields are untouched; manual
@@ -81,9 +81,9 @@ uses the existing scheduler-worker pattern.)
 | Class | Fields | Rule |
 |---|---|---|
 | Integration-managed | external tenant id (mapping key, immutable), `display_name` (workspace + default project name), `verified_domains`, tenant `status`, `metadata` | overwritten **only when supplied**; domains merged into `Project.allowed_domains`, and only entries the mapping itself added may later be removed |
-| Seed-only | `defaults.branding` (logo, subtitle); later launcher/pre-chat defaults | applied at creation, never re-applied |
+| Seed-only | `defaults.branding` (logo, subtitle); launcher/pre-chat defaults (`defaults.widget`) | applied at creation, never re-applied |
 | RastiChat-admin-managed | routing, queues, teams, canned replies, macros, SLA, automations, memberships, hand-added allowed domains | never touched by provisioning |
-| Project-admin-managed | launcher, branding, pre-chat form (PR C) | via project configuration; integration may only seed |
+| Project-admin-managed | launcher, branding, pre-chat form | via project configuration; integration may only seed |
 
 ## Security model summary
 
@@ -103,7 +103,7 @@ uses the existing scheduler-worker pattern.)
 | Redis down | integration tokens refused (503 `replay_store_unavailable`); nothing is accepted unverified |
 | Partial provisioning | one DB transaction — all of workspace/project/mapping/audit or none |
 | Concurrent first provision | unique constraint resolves the race; the loser retries into the update path (tested) |
-| Host retries any call | PUT/DELETE idempotent; mutating non-idempotent calls (PR E) take `Idempotency-Key` |
+| Host retries any call | PUT/DELETE idempotent; mutating non-idempotent calls take `Idempotency-Key` |
 | RastiChat unavailable | host must treat chat as optional UI (launcher hidden); no host function depends on chat |
 
 ## Data classification and retention
@@ -134,15 +134,15 @@ Alert on: `token_refused:replay` / `token_refused:*` spikes (attack or clock ske
 
 ## Implementation status
 
-| Slice | PR | Status |
-|---|---|---|
-| Integration, keys, mapping, signed-request auth, replay protection, scopes, provisioning, lifecycle, audit, throttling, CLI | A | **Implemented** |
-| Identity assertions, customer/staff/platform bootstrap, guest upgrade, membership/identity deprovisioning | B | **Implemented** |
-| Launcher config, pre-chat schema/persistence, widget config API, widget (launcher, lazy start, pre-chat form, bootstrap), dashboard settings + sidebar | C | **Implemented** |
-| Reference (non-RastiSi) host + generic E2E (+ headless proof) | D | **Implemented** |
-| Platform-initiated conversations, tenant start/resume, close/reopen, notifications, integration initiation API + Idempotency-Key | E | **Implemented** |
-| RastiSi adapter & UI flows (RastiSi repository, `apps/chat_integration`) | F, G | **Implemented** (draft PR in the RastiSi repository) |
-| Rollout/rollback runbook, RastiSi cross-system E2E, combined verification | H | **Implemented** |
-| Host-pushed customer context (`context:write`, `ctx` claim, operator sidebar) | verification phase | **Implemented** |
-| Structured events + counters | verification phase | **Implemented** |
-| Webhook/event delivery | — | **Deferred by design** (`docs/integrations/V1_SCOPE_AND_DEFERRALS.md`) |
+| Capability | Status |
+|---|---|
+| Integration, keys, tenant mapping, signed-request auth, replay protection, scopes, provisioning, lifecycle, audit, throttling, CLI | **Implemented** |
+| Identity assertions, customer/staff/platform bootstrap, guest upgrade, membership/identity deprovisioning | **Implemented** |
+| Launcher config, pre-chat schema/persistence, widget config API, widget (launcher, lazy start, pre-chat form, bootstrap), dashboard settings + sidebar | **Implemented** |
+| Reference (non-product-specific) host + generic E2E (+ headless proof) | **Implemented** |
+| Platform-initiated conversations, tenant start/resume, close/reopen, notifications, integration initiation API + `Idempotency-Key` | **Implemented** |
+| Host-pushed customer context (`context:write`, `ctx` claim, operator sidebar) | **Implemented** |
+| Structured events + day-bucketed counters on the monitoring endpoint | **Implemented** |
+| Rollout/rollback runbook, rollback-compatible migrations (`db_default`) | **Implemented** |
+| Webhook/event delivery (`events:receive`) | **Deferred by design** (`docs/integrations/V1_SCOPE_AND_DEFERRALS.md`) |
+| Published TypeScript SDK, Prometheus exporter, business-hours behaviour | **Deferred / not applicable** (same document) |

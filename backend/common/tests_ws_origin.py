@@ -22,7 +22,7 @@ from knowledge_base.tests_base import KBTestMixin
 
 _restricted_application = OriginValidator(
     AuthMiddlewareStack(URLRouter(websocket_urlpatterns)),
-    ['https://operator-chat-staging.rastisi.ir'],
+    ['https://operator-chat-staging.example.com'],
 )
 
 
@@ -46,7 +46,7 @@ class WebSocketOriginValidationTests(KBTestMixin, TransactionTestCase):
     async def test_allowed_origin_still_connects(self):
         communicator = WebsocketCommunicator(
             _restricted_application, f"/ws/widget/{self.session.token}/{self.conv.id}/",
-            headers=[(b'origin', b'https://operator-chat-staging.rastisi.ir')],
+            headers=[(b'origin', b'https://operator-chat-staging.example.com')],
         )
         connected, _ = await communicator.connect()
         self.assertTrue(connected)
