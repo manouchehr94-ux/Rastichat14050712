@@ -42,7 +42,7 @@ manual fallback/double-check for the rest).
 4. Confirm: the message either fails visibly (retry-able) or is
    delivered once the WebSocket reconnects — never silently lost, never
    duplicated.
-5. Confirm `curl https://chat-staging.rastisi.ir/api/v1/health/ready/`
+5. Confirm `curl https://chat-staging.example.com/api/v1/health/ready/`
    reports `redis.up: false` during the outage and `true` again after.
 6. Confirm a second, unrelated workspace's conversation (if you have
    one) shows no cross-workspace message leakage after reconnect.
@@ -76,9 +76,9 @@ path. Once per release, manually:
 
 ## Manual — real storefront embed (once per release, or whenever the embed snippet changes)
 
-1. Embed the real `<script src="https://chat-staging.rastisi.ir/widget.js">`
+1. Embed the real `<script src="https://chat-staging.example.com/widget.js">`
    snippet (see `docs/runbooks/STAGING_DEPLOYMENT.md` section 8) on an
-   actual page under the Rastisi storefront domain listed in
+   actual page under a host-application domain listed in
    `CORS_ALLOWED_ORIGINS` — not `embed.html`.
 2. Confirm the widget loads and a conversation round-trips end to end.
 

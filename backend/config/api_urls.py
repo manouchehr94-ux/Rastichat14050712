@@ -1,6 +1,7 @@
 from django.urls import path, include
 from rest_framework.routers import DefaultRouter
 from visitors.urls import session_urlpatterns
+from integrations.urls import identity_urlpatterns as integration_identity_urlpatterns
 from common.views import HealthCheckView, LivenessView, MonitoringView, ReadinessView
 from conversations.views import (
     CustomerConversationViewSet, PlatformSupportViewSet, WorkspaceSupportViewSet,
@@ -11,6 +12,7 @@ from conversations.views import (
 from conversations.ws_ticket_views import DashboardWsTicketView, WidgetWsTicketView
 from conversations.attachment_views import AttachmentDownloadView, AttachmentRefreshView
 from catalog.views import ProductViewSet
+from projects.widget_views import AdminProjectListView, ProjectWidgetConfigAdminView, WidgetConfigView
 from customer_context.views import (
     TagViewSet, ConversationTagsView, ConversationNotesView, CustomerContextView,
 )
@@ -51,6 +53,8 @@ router.register(r'macros', MacroViewSet, basename='macro')
 
 urlpatterns = [
     path('auth/', include('accounts.urls')),
+    path('integrations/', include('integrations.urls')),
+    path('identity/', include((integration_identity_urlpatterns, 'identity'))),
     path('health/', HealthCheckView.as_view(), name='health-check'),
     path('health/live/', LivenessView.as_view(), name='health-live'),
     path('health/ready/', ReadinessView.as_view(), name='health-ready'),
@@ -58,6 +62,9 @@ urlpatterns = [
     path('widget/init/', include('visitors.urls')),
     path('widget/session/', include((session_urlpatterns, 'visitors-session'))),
     path('widget/start/', StartCustomerChatView.as_view(), name='widget-start'),
+    path('widget/config/', WidgetConfigView.as_view(), name='widget-config'),
+    path('projects/', AdminProjectListView.as_view(), name='admin-project-list'),
+    path('projects/<int:pk>/widget-config/', ProjectWidgetConfigAdminView.as_view(), name='project-widget-config'),
     path('attachments/<uuid:message_id>/', AttachmentDownloadView.as_view(), name='attachment-download'),
     path('attachments/<uuid:message_id>/refresh/', AttachmentRefreshView.as_view(), name='attachment-refresh'),
     path('widget/attachments/<uuid:message_id>/refresh/', AttachmentRefreshView.as_view(), name='widget-attachment-refresh'),  # under /widget/ so the project-aware CORS applies

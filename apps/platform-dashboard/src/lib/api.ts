@@ -18,6 +18,20 @@ export const login = async (email: string, password: string) => {
     return data;
 };
 
+// Host-application SSO: exchange a host-signed assertion (never typed by a user) for a short-lived dashboard token.
+export const ssoLogin = async (assertion: string) => {
+    const res = await fetch(`${API_BASE}/identity/staff/`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ assertion })
+    });
+    if (!res.ok) throw new Error('SSO failed');
+    const data = await res.json();
+    localStorage.setItem('token', data.access);
+    localStorage.setItem('user', JSON.stringify(data.user));
+    return data;
+};
+
 export const getToken = () => localStorage.getItem('token');
 // signed attachment URLs expire: swap in a fresh one (once) when an <img>/<audio> holding one fails to load
 installAttachmentRefresh(API_BASE, getToken);
@@ -56,6 +70,36 @@ export const markPlatformRead = async (convId: string) => {
         method: 'POST', headers: { 'Authorization': `Bearer ${getToken()}` }
     });
     if (!res.ok) throw new Error('Failed to mark read');
+    return res.json();
+};
+
+export interface PlatformWorkspace { id: number; name: string }
+
+/** Tenants this platform user may open a conversation with (platform Owner/Admin only). */
+export const fetchPlatformWorkspaces = async (q = ''): Promise<PlatformWorkspace[]> => {
+    const res = await fetch(`${API_BASE}/platform/support/workspaces/?q=${encodeURIComponent(q)}`, { headers: { 'Authorization': `Bearer ${getToken()}` } });
+    if (!res.ok) throw new Error('Failed to fetch workspaces');
+    return res.json();
+};
+
+/** Open (or resume) the support conversation with a tenant — the tenant never has to write first. Idempotent per subject_key. */
+export const startPlatformThread = async (body: { workspace_id: number; subject: string; message: string; client_message_id: string; subject_key?: string }) => {
+    const res = await fetch(`${API_BASE}/platform/support/start/`, {
+        method: 'POST', headers: { 'Authorization': `Bearer ${getToken()}`, 'Content-Type': 'application/json' }, body: JSON.stringify(body),
+    });
+    if (!res.ok) throw Object.assign(new Error('Failed to start conversation'), { status: res.status, body: await res.json().catch(() => ({})) });
+    return res.json();
+};
+
+export const closePlatformThread = async (convId: string) => {
+    const res = await fetch(`${API_BASE}/platform/support/${convId}/close/`, { method: 'POST', headers: { 'Authorization': `Bearer ${getToken()}` } });
+    if (!res.ok) throw new Error('Failed to close');
+    return res.json();
+};
+
+export const reopenPlatformThread = async (convId: string) => {
+    const res = await fetch(`${API_BASE}/platform/support/${convId}/reopen/`, { method: 'POST', headers: { 'Authorization': `Bearer ${getToken()}` } });
+    if (!res.ok) throw new Error('Failed to reopen');
     return res.json();
 };
 

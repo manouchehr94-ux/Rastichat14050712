@@ -31,6 +31,20 @@ export const login = async (email: string, password: string) => {
     return data;
 };
 
+// Host-application SSO: exchange a host-signed assertion (never typed by a user) for a short-lived dashboard token.
+export const ssoLogin = async (assertion: string) => {
+    const res = await fetch(`${API_BASE}/identity/staff/`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ assertion })
+    });
+    if (!res.ok) throw new Error('SSO failed');
+    const data = await res.json();
+    localStorage.setItem('token', data.access);
+    localStorage.setItem('user', JSON.stringify(data.user));
+    return data;
+};
+
 export const getToken = () => localStorage.getItem('token');
 // signed attachment URLs expire: swap in a fresh one (once) when an <img>/<audio> holding one fails to load
 installAttachmentRefresh(API_BASE, getToken);
@@ -420,6 +434,20 @@ export const sendSupportMessage = async (convId: string, content: string, client
     if (!res.ok) throw new Error('Failed to send message');
     return res.json();
 };
+export const markSupportRead = async (convId: string) => {
+    const res = await fetch(`${API_BASE}/support/${convId}/mark_read/`, { method: 'POST', headers: { 'Authorization': `Bearer ${getToken()}` } });
+    if (!res.ok) throw new Error('Failed to mark read');
+};
+export const closeSupportConversation = async (convId: string) => {
+    const res = await fetch(`${API_BASE}/support/${convId}/close/`, { method: 'POST', headers: { 'Authorization': `Bearer ${getToken()}` } });
+    if (!res.ok) throw new Error('Failed to close');
+    return res.json();
+};
+export const reopenSupportConversation = async (convId: string) => {
+    const res = await fetch(`${API_BASE}/support/${convId}/reopen/`, { method: 'POST', headers: { 'Authorization': `Bearer ${getToken()}` } });
+    if (!res.ok) throw new Error('Failed to reopen');
+    return res.json();
+};
 export const connectSupportWebSocket = (convId: string, onMessage: (data: SupportSocketMessage) => void): WebSocket =>
     openTicketSocket(`/v2/support/${convId}/`, { kind: 'support', conversation_id: convId }, (data) => onMessage(data as SupportSocketMessage), async () => {
         try {
@@ -733,3 +761,33 @@ export const retryMacroExecution = async (id: string) => {
     if (!res.ok) { const body = await res.json().catch(() => ({})); throw new Error(body.error || 'Failed to retry execution'); }
     return res.json();
 };
+
+// --- widget settings (launcher / pre-chat / identity policy) — Owner/Admin of the project's workspace only ---
+export interface AdminProject { id: number; name: string; workspace_id: number; public_key: string; is_active: boolean; allowed_domains: string }
+
+export const fetchAdminProjects = async (): Promise<AdminProject[]> => {
+    const res = await fetch(`${API_BASE}/projects/`, { headers: { 'Authorization': `Bearer ${getToken()}` } });
+    if (!res.ok) throw new Error('Failed to fetch projects');
+    return res.json();
+};
+
+export const fetchWidgetConfig = async (projectId: number) => {
+    const res = await fetch(`${API_BASE}/projects/${projectId}/widget-config/`, { headers: { 'Authorization': `Bearer ${getToken()}` } });
+    if (!res.ok) throw new Error('Failed to fetch widget configuration');
+    return res.json() as Promise<{ config: Record<string, unknown>; effective: Record<string, unknown> }>;
+};
+
+export class WidgetConfigError extends Error {
+    constructor(public errors: Record<string, string>) { super('Invalid widget configuration'); }
+}
+
+export const saveWidgetConfig = async (projectId: number, doc: Record<string, unknown>) => {
+    const res = await fetch(`${API_BASE}/projects/${projectId}/widget-config/`, {
+        method: 'PUT', headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${getToken()}` }, body: JSON.stringify(doc),
+    });
+    if (res.status === 400) throw new WidgetConfigError((await res.json()).errors || {});
+    if (!res.ok) throw new Error('Failed to save widget configuration');
+    return res.json() as Promise<{ config: Record<string, unknown>; effective: Record<string, unknown> }>;
+};
+
+export const widgetApiBase = () => API_BASE;

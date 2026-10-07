@@ -1,0 +1,4 @@
+# Reviewed false positive: RFC 6455's public sample Sec-WebSocket-Key ("dGhlIHNhbXBsZSBub25jZQ==" = base64 of "the sample nonce") appeared in one earlier
+# commit of scripts/staging/sandbox/wslimit.sh (a rate-limit probe). It is a protocol constant, not a credential; the script now generates a random key.
+# Scoped to this single finding (commit:file:rule:line) so the scanner stays fully active everywhere else.
+5987f44f0be33550c5a2994d37acadc29cb14f72:scripts/staging/sandbox/wslimit.sh:generic-api-key:9

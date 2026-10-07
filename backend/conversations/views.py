@@ -8,10 +8,13 @@ from rest_framework.views import APIView
 from rest_framework.decorators import action
 from rest_framework.parsers import MultiPartParser, FormParser
 from rest_framework.throttling import ScopedRateThrottle
+from common import observability
 from .models import Conversation, Message, MessageReceipt, Assignment, PriorityChange
 from .serializers import ConversationSerializer, MessageSerializer, AssignmentSerializer
 from .media_validation import validate_and_normalize_upload, UploadValidationError
 from . import services as conv_services
+from . import support_service
+from workspaces.models import Workspace
 from common.pagination import StandardPagination
 from common.throttles import StaffWriteThrottle
 from common.permissions import IsWorkspaceOperator, IsWorkspaceAdmin, IsPlatformSupportAgent, user_can_supervise_workspace
@@ -401,6 +404,15 @@ class CustomerConversationViewSet(
         return Response(data, status=201)
 
 class StartCustomerChatView(APIView):
+    """`POST /api/v1/widget/start/` — find or create the visitor's open conversation.
+
+    Additive options (the original request/response shape is unchanged):
+    * `create: false` — only look: returns the existing open conversation, or `{"id": null}` WITHOUT creating one
+      (so a widget can restore history on page load without filling the inbox with empty conversations);
+    * `pre_chat: {key: answer}` — the answers to the project's pre-chat form. Validated against the project's CURRENT
+      configuration (required/typed/choices) before anything is created; stored with the conversation (and exposed to
+      routing/automations as `conversation.pre_chat`) only when this call creates the conversation.
+    """
     permission_classes = []
     throttle_classes = [ScopedRateThrottle]
     throttle_scope = 'widget_start'
@@ -410,13 +422,35 @@ class StartCustomerChatView(APIView):
         session = get_request_session(request)
         if session is None:
             return Response({'error': 'Invalid session', 'code': 'session_invalid'}, status=status.HTTP_401_UNAUTHORIZED)
+        visitor = session.visitor
+        workspace = visitor.project.workspace
+        from projects.widget_config import guests_allowed
+        if not guests_allowed(visitor.project) and not hasattr(visitor, 'external_identity'):
+            return Response({'error': 'This chat requires a signed-in customer.', 'code': 'identity_required'},
+                            status=status.HTTP_403_FORBIDDEN)
+        lookup = dict(visitor=visitor, workspace=workspace, type=Conversation.Type.CUSTOMER, status=Conversation.Status.OPEN)
+        peek_only = request.data.get('create') is False
+        answers = None
+        if not peek_only and not Conversation.objects.filter(**lookup).exists():
+            answers = self._validated_pre_chat(visitor.project, request.data.get('pre_chat'))
+            if isinstance(answers, Response):
+                return answers
+        if peek_only:
+            existing = Conversation.objects.filter(**lookup).first()
+            if existing is None:
+                return Response({'id': None}, status=200)
         with transaction.atomic():
-            conv, created = Conversation.objects.get_or_create(visitor=session.visitor, workspace=session.visitor.project.workspace, type=Conversation.Type.CUSTOMER, status=Conversation.Status.OPEN)
+            conv, created = Conversation.objects.get_or_create(**lookup)
             if not created and conv.status == 'CLOSED': conv.status = 'OPEN'; conv.save()
             if created:
                 from queues.services import route_new_conversation
                 from sla.services import apply_sla
                 from automations.events import publish_event
+                from .models import PreChatSubmission
+                if answers:
+                    PreChatSubmission.objects.create(conversation=conv, answers=answers)
+                    observability.emit('prechat_submitted', answers=len(answers))
+                observability.emit('conversation_created', label='customer')
                 # Routing/SLA must be persisted BEFORE CONVERSATION_CREATED is
                 # published — an automation condition on conversation.queue_id,
                 # operational.queue_has_capacity, or conversation.sla_state must
@@ -426,7 +460,8 @@ class StartCustomerChatView(APIView):
                 # whole sequence in one atomic block also means a failure here
                 # (e.g. routing/SLA raising) rolls back the conversation creation
                 # too, rather than leaving a misleading published event with no
-                # backing conversation state.
+                # backing conversation state. The pre-chat answers are saved first so
+                # rules (routing by topic, ...) see them on CONVERSATION_CREATED.
                 conv = route_new_conversation(conv)
                 apply_sla(conv)
                 publish_event('CONVERSATION_CREATED', conv.workspace_id, conversation_id=conv.id, actor_type='SYSTEM')
@@ -437,6 +472,19 @@ class StartCustomerChatView(APIView):
         data['session_expires_at'] = session.expires_at
         data['rotate_session'] = rotation_due(session)
         return Response(data, status=200)
+
+    @staticmethod
+    def _validated_pre_chat(project, raw):
+        """None when the project asks no questions; the answer snapshot when valid; a 400 Response otherwise."""
+        from projects.widget_config import ConfigError, resolve_config, validate_answers
+        config = resolve_config(project)
+        if not config['pre_chat']['enabled']:
+            return None
+        try:
+            return validate_answers(config, raw if raw is not None else {})
+        except ConfigError as exc:
+            return Response({'error': 'Invalid pre-chat answers.', 'code': 'pre_chat_invalid', 'errors': exc.errors},
+                            status=status.HTTP_400_BAD_REQUEST)
 
 class MessageListView(APIView):
     permission_classes = [IsWorkspaceOperator]
@@ -630,8 +678,6 @@ class WorkspaceSupportViewSet(mixins.ListModelMixin, mixins.RetrieveModelMixin, 
     serializer_class = ConversationSerializer
     permission_classes = [IsWorkspaceAdmin]  # coarse gate only; queryset enforces the exact workspace
 
-    _THROTTLED_ACTIONS = ('create', 'send_message', 'reply', 'assign', 'mark_read')
-
     def get_throttles(self):
         # only WRITE actions are limited: reading the inbox is cheap and polled
         if self.action in self._THROTTLED_ACTIONS:
@@ -641,7 +687,9 @@ class WorkspaceSupportViewSet(mixins.ListModelMixin, mixins.RetrieveModelMixin, 
     def get_queryset(self):
         return Conversation.objects.filter(
             workspace_id__in=admin_workspace_ids(self.request.user), type=Conversation.Type.PLATFORM_SUPPORT,
-        ).order_by('-updated_at')
+        ).select_related('workspace').order_by('-updated_at')
+
+    _THROTTLED_ACTIONS = ('create', 'start', 'send_message', 'reply', 'assign', 'mark_read', 'close', 'reopen')
 
     def create(self, request, *args, **kwargs):
         workspace = resolve_admin_workspace(request.user, request.data.get('workspace_id'))
@@ -652,7 +700,7 @@ class WorkspaceSupportViewSet(mixins.ListModelMixin, mixins.RetrieveModelMixin, 
         with transaction.atomic():
             conv = Conversation.objects.create(
                 workspace=workspace, type=Conversation.Type.PLATFORM_SUPPORT,
-                status=Conversation.Status.WAITING_FOR_PLATFORM, subject=subject,
+                status=Conversation.Status.WAITING_FOR_PLATFORM, subject=subject, opened_by_side=Conversation.Side.TENANT,
             )
             if initial_message:
                 Message.objects.create(
@@ -662,50 +710,67 @@ class WorkspaceSupportViewSet(mixins.ListModelMixin, mixins.RetrieveModelMixin, 
             AuditEvent.objects.create(actor=request.user, action='support_conversation_created', target_type='conversation', target_id=str(conv.id))
         return Response(ConversationSerializer(conv, context={'request': request}).data, status=201)
 
+    @action(detail=False, methods=['post'])
+    def start(self, request):
+        """Create-or-resume THE support thread of this workspace for `subject_key` (default "general"): idempotent."""
+        workspace = resolve_admin_workspace(request.user, request.data.get('workspace_id'))
+        try:
+            conv, created, _ = support_service.start_thread(
+                workspace, request.user, Conversation.Side.TENANT, subject=request.data.get('subject'),
+                subject_key=request.data.get('subject_key'), message=request.data.get('message'),
+                client_message_id=request.data.get('client_message_id'))
+        except support_service.SupportError as exc:
+            return Response({'error': exc.message, 'code': exc.code}, status=exc.status)
+        data = ConversationSerializer(conv, context={'request': request}).data
+        return Response({**data, 'created': created}, status=201 if created else 200)
+
     @action(detail=True, methods=['get'])
     def messages(self, request, pk=None):
         conv = self.get_object()
-        msgs = conv.messages.all().order_by('created_at')
-        return Response(MessageSerializer(msgs, many=True).data)
+        msgs = list(conv.messages.all().order_by('created_at'))
+        return Response(support_service.serialize_messages(conv, msgs, MessageSerializer))
 
     @action(detail=True, methods=['post'])
     def send_message(self, request, pk=None):
         conv = self.get_object()
-        content = (request.data.get('content') or '').strip()
-        if not content: return Response({'error': 'Empty'}, status=400)
-        if len(content) > 5000: return Response({'error': 'Too long'}, status=400)
-
-        client_msg_id = request.data.get('client_message_id')
-        if not client_msg_id: return Response({'error': 'Missing client_message_id'}, status=400)
-        if Message.objects.filter(conversation=conv, client_message_id=client_msg_id).exists():
+        try:
+            msg, created = support_service.post_message(
+                conv, request.user, Conversation.Side.TENANT, request.data.get('content'), request.data.get('client_message_id'))
+        except support_service.SupportError as exc:
+            return Response({'error': exc.message, 'code': exc.code}, status=exc.status)
+        if not created:
             return Response({'error': 'Duplicate'}, status=409)
-
-        msg = Message.objects.create(conversation=conv, sender=request.user, sender_type=Message.SenderType.USER, content=content, client_message_id=client_msg_id)
-        conv.status = Conversation.Status.WAITING_FOR_PLATFORM
-        conv.save()
-
-        async_to_sync(get_channel_layer().group_send)(f"support_chat_{conv.id}", {'type': 'chat.message', 'message': {'id': str(msg.id), 'sender_type': 'USER', 'content': msg.content, 'created_at': msg.created_at.isoformat()}})
         return Response(MessageSerializer(msg).data, status=201)
 
     @action(detail=True, methods=['post'])
     def mark_read(self, request, pk=None):
-        conv = self.get_object()
-        for msg in conv.messages.exclude(receipts__user=request.user):
-            MessageReceipt.objects.create(message=msg, user=request.user)
+        support_service.mark_read(self.get_object(), request.user)
         return Response(status=200)
 
-class PlatformSupportViewSet(mixins.ListModelMixin, mixins.RetrieveModelMixin, viewsets.GenericViewSet):
-    """Platform-side inbox for store-admin support conversations.
+    @action(detail=True, methods=['post'])
+    def close(self, request, pk=None):
+        conv, _ = support_service.close_thread(self.get_object(), request.user, Conversation.Side.TENANT)
+        return Response(ConversationSerializer(conv, context={'request': request}).data)
 
-    Deliberately NOT a ModelViewSet: there is no generic create/update/delete
-    (a support agent must never be able to edit or delete a store's
-    conversation). Platform-initiated conversations get their own explicit,
-    separately-authorized endpoint. Scoped to platforms the caller belongs to.
+    @action(detail=True, methods=['post'])
+    def reopen(self, request, pk=None):
+        try:
+            conv, _ = support_service.reopen_thread(self.get_object(), request.user, Conversation.Side.TENANT)
+        except support_service.SupportError as exc:
+            return Response({'error': exc.message, 'code': exc.code}, status=exc.status)
+        return Response(ConversationSerializer(conv, context={'request': request}).data)
+
+class PlatformSupportViewSet(mixins.ListModelMixin, mixins.RetrieveModelMixin, viewsets.GenericViewSet):
+    """Platform-side inbox for tenant support conversations, including threads the PLATFORM opened.
+
+    Deliberately NOT a ModelViewSet: no generic update/delete (a support agent must never be able to edit or delete a
+    tenant's conversation). Opening a thread to a tenant is the explicit `start` action (Owner/Admin only, workspace must
+    belong to the caller's platform). Scoped to platforms the caller belongs to.
     """
     serializer_class = ConversationSerializer
     permission_classes = [IsPlatformSupportAgent]
 
-    _THROTTLED_ACTIONS = ('create', 'send_message', 'reply', 'assign', 'mark_read')
+    _THROTTLED_ACTIONS = ('create', 'start', 'send_message', 'reply', 'assign', 'mark_read', 'close', 'reopen')
 
     def get_throttles(self):
         # only WRITE actions are limited: reading the inbox is cheap and polled
@@ -716,19 +781,51 @@ class PlatformSupportViewSet(mixins.ListModelMixin, mixins.RetrieveModelMixin, v
     def get_queryset(self):
         return Conversation.objects.filter(
             workspace__platform__memberships__user=self.request.user, type=Conversation.Type.PLATFORM_SUPPORT,
-        ).distinct().order_by('-updated_at')
+        ).select_related('workspace').distinct().order_by('-updated_at')
+
+    @action(detail=False, methods=['get'], url_path='workspaces')
+    def workspaces(self, request):
+        """Workspaces (tenants) the caller may open a thread to: active ones on platforms where they are Owner/Admin."""
+        qs = Workspace.objects.filter(
+            platform__memberships__user=request.user, platform__memberships__role__in=support_service.PLATFORM_INITIATOR_ROLES,
+            is_active=True, platform__is_active=True,
+        ).distinct().order_by('name')
+        q = (request.query_params.get('q') or '').strip()
+        if q:
+            qs = qs.filter(name__icontains=q)
+        return Response([{'id': w.pk, 'name': w.name} for w in qs[:200]])
+
+    @action(detail=False, methods=['post'])
+    def start(self, request):
+        """Open (or resume) the support thread with a tenant — the tenant never has to write first. Idempotent per
+        (workspace, subject_key). Only the caller's own platform's workspaces exist for them (uniform 404 otherwise)."""
+        workspace = Workspace.objects.select_related('platform').filter(
+            pk=_int_or_none(request.data.get('workspace_id')), platform__memberships__user=request.user,
+            platform__memberships__role__in=support_service.PLATFORM_INITIATOR_ROLES,
+        ).first()
+        if workspace is None:
+            return Response({'error': 'Workspace not found.', 'code': 'workspace_not_found'}, status=404)
+        if not workspace.is_active or not workspace.platform.is_active:
+            return Response({'error': 'This workspace is not active.', 'code': 'tenant_unavailable'}, status=409)
+        try:
+            conv, created, _ = support_service.start_thread(
+                workspace, request.user, Conversation.Side.PLATFORM, subject=request.data.get('subject'),
+                subject_key=request.data.get('subject_key'), message=request.data.get('message'),
+                client_message_id=request.data.get('client_message_id'))
+        except support_service.SupportError as exc:
+            return Response({'error': exc.message, 'code': exc.code}, status=exc.status)
+        data = ConversationSerializer(conv, context={'request': request}).data
+        return Response({**data, 'created': created}, status=201 if created else 200)
 
     @action(detail=True, methods=['get'])
     def messages(self, request, pk=None):
         conv = self.get_object()
-        msgs = conv.messages.all().order_by('created_at')
-        return Response(MessageSerializer(msgs, many=True).data)
+        msgs = list(conv.messages.all().order_by('created_at'))
+        return Response(support_service.serialize_messages(conv, msgs, MessageSerializer))
 
     @action(detail=True, methods=['post'])
     def mark_read(self, request, pk=None):
-        conv = self.get_object()
-        for msg in conv.messages.exclude(receipts__user=request.user):
-            MessageReceipt.objects.create(message=msg, user=request.user)
+        support_service.mark_read(self.get_object(), request.user)
         return Response(status=200)
 
     @action(detail=True, methods=['post'])
@@ -751,20 +848,34 @@ class PlatformSupportViewSet(mixins.ListModelMixin, mixins.RetrieveModelMixin, v
     @action(detail=True, methods=['post'])
     def reply(self, request, pk=None):
         conv = self.get_object()
-        content = (request.data.get('content') or '').strip()
-        if not content: return Response({'error': 'Empty'}, status=400)
-        if len(content) > 5000: return Response({'error': 'Too long'}, status=400)
-        client_msg_id = request.data.get('client_message_id')
-        if not client_msg_id: return Response({'error': 'Missing client_message_id'}, status=400)
-        if Message.objects.filter(conversation=conv, client_message_id=client_msg_id).exists():
+        try:
+            msg, created = support_service.post_message(
+                conv, request.user, Conversation.Side.PLATFORM, request.data.get('content'), request.data.get('client_message_id'))
+        except support_service.SupportError as exc:
+            return Response({'error': exc.message, 'code': exc.code}, status=exc.status)
+        if not created:
             return Response({'error': 'Duplicate'}, status=409)
-
-        msg = Message.objects.create(conversation=conv, sender=request.user, sender_type=Message.SenderType.USER, content=content, client_message_id=client_msg_id)
-        conv.status = Conversation.Status.WAITING_FOR_WORKSPACE
-        conv.save()
-
-        async_to_sync(get_channel_layer().group_send)(f"support_chat_{conv.id}", {'type': 'chat.message', 'message': {'id': str(msg.id), 'sender_type': 'USER', 'content': msg.content, 'created_at': msg.created_at.isoformat()}})
         return Response(MessageSerializer(msg).data, status=201)
+
+    @action(detail=True, methods=['post'])
+    def close(self, request, pk=None):
+        conv, _ = support_service.close_thread(self.get_object(), request.user, Conversation.Side.PLATFORM)
+        return Response(ConversationSerializer(conv, context={'request': request}).data)
+
+    @action(detail=True, methods=['post'])
+    def reopen(self, request, pk=None):
+        try:
+            conv, _ = support_service.reopen_thread(self.get_object(), request.user, Conversation.Side.PLATFORM)
+        except support_service.SupportError as exc:
+            return Response({'error': exc.message, 'code': exc.code}, status=exc.status)
+        return Response(ConversationSerializer(conv, context={'request': request}).data)
+
+
+def _int_or_none(value):
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
 
 
 class OperationalSummaryView(APIView):

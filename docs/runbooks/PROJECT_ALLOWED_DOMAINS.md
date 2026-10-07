@@ -30,7 +30,7 @@ Browsers always send `Origin` on a cross-site `fetch`/WebSocket, so a missing he
 (server-to-server, curl, a native app) or a same-origin GET. Such a caller can forge any `Origin`, so the domain list can
 never be *authentication* — it only stops **other websites' browsers** from using a project key. Hence: creating a session
 (the unauthenticated step) requires a verifiable `Origin`; calls that already carry a valid session credential are authorised
-by that credential and merely tolerated without an `Origin`. Server-to-server identity for RastiSi will use the signed-assertion
+by that credential and merely tolerated without an `Origin`. Server-to-server identity for host applications uses the signed-assertion
 path (SSO), not widget init. `Origin: null` (sandboxed iframes, `file://`) never matches.
 
 ## CORS and the WebSocket handshake follow the configured domains
@@ -42,9 +42,8 @@ static list keeps working unchanged.
 
 ## Rollout (nothing is changed on a live server by this PR)
 1. Deploy. Behaviour for projects with empty domains is unchanged.
-2. `python manage.py report_projects_domain_status` — fill every active project's domains (for RastiSi stores:
-   `projects.domains.sync_allowed_domains(project, verified_store_hostnames)` — the store's verified platform sub-domain and verified
-   custom domains; idempotent, never removes manual entries).
+2. `python manage.py report_projects_domain_status` — fill every active project's domains (for tenants provisioned by an integration this happens automatically from `verified_domains`; to do it by hand:
+   `projects.domains.sync_allowed_domains(project, verified_hostnames)` — idempotent, never removes manual entries).
 3. Set `WIDGET_REQUIRE_ALLOWED_DOMAINS=1`. Rollback: unset it.
 
 Compatibility risk to check before step 3: a store embedding the widget from a domain not yet listed gets 403 `origin_not_allowed`

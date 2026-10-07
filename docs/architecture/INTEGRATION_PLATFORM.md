@@ -1,0 +1,148 @@
+# RastiChat Integration Platform — architecture
+
+> Status: living document. **Implemented** = code with automated tests in this repository; **Deferred by design** = specified or
+> reserved but intentionally not built (see `docs/integrations/V1_SCOPE_AND_DEFERRALS.md`). See the status table at the end.
+
+## Principle
+
+> RastiChat is a standalone, reusable, multi-tenant communication platform. Host applications integrate through
+> stable generic contracts. No host product is part of the domain model of RastiChat.
+
+Everything below is host-agnostic. Product-specific words ("store", "order", a particular host's name) appear only in the optional
+case study `docs/case-studies/RASTISI.md` and in that host's own repository. The acceptance test for every design decision is: *could an unrelated SaaS integrate
+tomorrow using only these documents and configuration, with no change to RastiChat core?*
+
+## Concept map
+
+| Generic concept | RastiChat representation | Host supplies |
+|---|---|---|
+| Integration (a host application) | `integrations.Integration` (+ `IntegrationKey`, public keys only) | slug, public key(s) |
+| Platform (the SaaS owner) | existing `platforms.Platform` | — (chosen at registration) |
+| Tenant | `workspaces.Workspace` via `IntegrationTenantMapping` | external tenant id, display name, verified domains |
+| Project (a widget deployment) | existing `projects.Project` (one default per mapping) | — |
+| Customer / visitor | existing `visitors.Visitor` (+ `ExternalIdentity`) | trusted assertion |
+| Staff / operator | existing `accounts.User` + `WorkspaceMembership` (+ `ExternalIdentity`) | trusted assertion (generic role) |
+| Platform actor | existing `PlatformMembership` | trusted assertion |
+| Conversation / message / routing / SLA … | existing engine — **unchanged** | — |
+
+The mapping table is the *only* place an external identifier lives. Core chat models carry no host columns.
+(`Workspace.external_id` / `Platform.external_id` pre-date this work and are not used as a source of truth.)
+
+## Decisions
+
+### D1. Reuse the conversation engine; add a thin integration layer
+An embedded integration is just another way to create a `Visitor`/`User` and a `Workspace`. Messages, inbox, routing,
+SLA, automations, receipts, attachments and WebSocket protocol are the existing ones. No second simplified backend.
+
+### D2. Asymmetric (Ed25519) signing, public keys only at rest
+Host → RastiChat trust is established by JWTs signed with the host's **Ed25519 private key** (JWS `EdDSA`).
+RastiChat stores **only public keys**.
+
+Why not a shared HMAC secret:
+* A database/backup leak at RastiChat would let an attacker forge assertions for every integration; with public keys
+  it cannot.
+* No secret has to be transported to, or stored encrypted by, RastiChat; rotation never requires coordinating a
+  shared value (add key → switch → revoke).
+* `Django SECRET_KEY` is never involved (and must never be used for this).
+
+Cost: the host needs an Ed25519-capable JOSE library (available for every mainstream language; in Python
+`PyJWT[crypto]`/`cryptography`). Algorithm confusion is closed by pinning `EdDSA` and parsing the stored value as an
+Ed25519 *public key object* (an HS256 token "signed" with the public key is rejected — tested).
+
+One verifier (`integrations/tokens.py`) serves every token: pinned algorithm, `kid` lookup, active key + active
+integration, `iss == integration.slug`, purpose-specific `aud` (`<audience>:api` ≠ `<audience>:identity`),
+mandatory `exp/iat/jti/sub`, TTL cap per purpose (api 60 s, identity 120 s), clock leeway 5 s, **single-use `jti`**
+(Redis `SET NX`, fail-closed — if Redis is down the token is refused with 503, never accepted).
+
+### D3. Request-bound server-to-server tokens
+API tokens additionally carry `htm` (method), `htu` (path) and `bh` (SHA-256 of the body). A captured token cannot
+be replayed (single use), re-targeted at another endpoint, or combined with another body.
+
+### D4. Least privilege via scopes
+`Integration.scopes` is what the integration may ever do; `IntegrationKey.scopes` narrows per key. A request is
+authorised for the intersection. (`tenants:read|write`, `identity:customer|staff|platform`, `conversations:initiate`, `context:write`; `events:receive` is reserved for the deferred webhook delivery.)
+
+### D5. Provisioning is an idempotent PUT with explicit field ownership
+See "Configuration ownership" below. Repeating a call never duplicates; omitted fields are untouched; manual
+RastiChat configuration is never overwritten.
+
+### D6. Lifecycle reuses existing revocation machinery
+Suspending/archiving a tenant sets `Workspace.is_active=False` and `Project.is_active=False` and revokes its visitor
+sessions. Existing REST/WebSocket/session code already refuses inactive workspaces/projects and re-validates live
+sockets, so prompt cut-off needs no new enforcement path. History is **retained**; deletion is a separate retention
+operation, never a side effect of deprovisioning.
+
+### D7. No new infrastructure
+Same Django/DRF/Channels/PostgreSQL/Redis. No queue, microservice or extra database. (Webhook delivery, when added,
+uses the existing scheduler-worker pattern.)
+
+## Configuration ownership
+
+| Class | Fields | Rule |
+|---|---|---|
+| Integration-managed | external tenant id (mapping key, immutable), `display_name` (workspace + default project name), `verified_domains`, tenant `status`, `metadata` | overwritten **only when supplied**; domains merged into `Project.allowed_domains`, and only entries the mapping itself added may later be removed |
+| Seed-only | `defaults.branding` (logo, subtitle); launcher/pre-chat defaults (`defaults.widget`) | applied at creation, never re-applied |
+| RastiChat-admin-managed | routing, queues, teams, canned replies, macros, SLA, automations, memberships, hand-added allowed domains | never touched by provisioning |
+| Project-admin-managed | launcher, branding, pre-chat form | via project configuration; integration may only seed |
+
+## Security model summary
+
+* Browser-supplied ids (`external_id`, `user_id`, `tenant_id`, `role`, project key) are **never** proof of identity.
+  Identity comes only from a host-signed assertion, verified server-side.
+* Integrations cannot see each other: every tenant lookup is filtered by the authenticated integration
+  (cross-integration access returns the same 404 as a missing tenant). Tested.
+* Provisioning/identity endpoints: dedicated keys, per-integration rate limit, per-IP failed-auth limit,
+  structured refusal logs (no token/claim values), audit rows (identifiers and field names only, no PII).
+* Existing guarantees are untouched: WS tickets, visitor-session expiry/revocation/rotation, allowed domains,
+  private attachments, URL-credential redaction.
+
+## Failure behaviour
+
+| Failure | Behaviour |
+|---|---|
+| Redis down | integration tokens refused (503 `replay_store_unavailable`); nothing is accepted unverified |
+| Partial provisioning | one DB transaction — all of workspace/project/mapping/audit or none |
+| Concurrent first provision | unique constraint resolves the race; the loser retries into the update path (tested) |
+| Host retries any call | PUT/DELETE idempotent; mutating non-idempotent calls take `Idempotency-Key` |
+| RastiChat unavailable | host must treat chat as optional UI (launcher hidden); no host function depends on chat |
+
+## Data classification and retention
+
+What RastiChat stores about a host's people, why, and for how long. Nothing here is replicated from the host database: only what
+the host chooses to send, minimised.
+
+| Class | Examples | Where | Source | Retention / removal |
+|---|---|---|---|---|
+| **Identity** (pseudonymous key) | external customer/staff id (`sub`), tenant id | `ExternalIdentity`, `Visitor.external_id` (`int:<slug>:<sub>`) | signed assertion only | kept while the tenant exists; `disable` stops access immediately; removal is an explicit retention operation (below) |
+| **Profile display data** | display name | `Visitor.name`, staff `User.display_name` | assertion `name` (≤255 chars) | updated on every assertion; goes when the identity is erased |
+| **Conversation context** | plan/tier, current page, order reference | `ExternalContext` (`profile`, `context`) | `context:write` API or `ctx` claim | replaced as a whole on each push; `DELETE …/contexts/{customer}/` removes it |
+| **Conversation content** | messages, attachments, pre-chat answers | existing conversation tables / private media | the customer and operators | governed by the existing retention process; **never deleted merely because host membership ended** |
+| **Sensitive** (credentials, payment data, national ids, health…) | — | **not accepted** | refused by the context validator (`sensitive_context_not_accepted`); credential-like values/keys rejected | n/a |
+| **Secrets** | host private keys | never stored (RastiChat holds public keys only) | — | key revocation (`integration_key_revoke`) |
+
+Rules: no secret or token is ever placed in `metadata`, context, audit rows or log lines (audit stores identifiers and key *names*;
+`common/observability` drops credential-named fields and sanitises values). Host-supplied text is rendered as text, never as markup.
+**Retention operations are manual and explicit** (none run automatically as a side effect of deprovisioning); erasing one customer
+= disable → delete context → the operator-approved conversation deletion procedure for that visitor.
+
+## Observability
+
+`common/observability.emit()` writes one structured line (`rastichat_event event=<name> label=<code> …`) and increments a
+day-bucketed Redis counter. Counters are returned by the token-protected `GET /api/v1/health/monitoring/` as `events_last_24h`.
+Alert on: `token_refused:replay` / `token_refused:*` spikes (attack or clock skew), `cross_tenant_denied:*`, `rate_limited`,
+`ws_auth:refused`, and the log line `integration_replay_store_unavailable` (Redis down → no integration call succeeds).
+
+## Implementation status
+
+| Capability | Status |
+|---|---|
+| Integration, keys, tenant mapping, signed-request auth, replay protection, scopes, provisioning, lifecycle, audit, throttling, CLI | **Implemented** |
+| Identity assertions, customer/staff/platform bootstrap, guest upgrade, membership/identity deprovisioning | **Implemented** |
+| Launcher config, pre-chat schema/persistence, widget config API, widget (launcher, lazy start, pre-chat form, bootstrap), dashboard settings + sidebar | **Implemented** |
+| Reference (non-product-specific) host + generic E2E (+ headless proof) | **Implemented** |
+| Platform-initiated conversations, tenant start/resume, close/reopen, notifications, integration initiation API + `Idempotency-Key` | **Implemented** |
+| Host-pushed customer context (`context:write`, `ctx` claim, operator sidebar) | **Implemented** |
+| Structured events + day-bucketed counters on the monitoring endpoint | **Implemented** |
+| Rollout/rollback runbook, rollback-compatible migrations (`db_default`) | **Implemented** |
+| Webhook/event delivery (`events:receive`) | **Deferred by design** (`docs/integrations/V1_SCOPE_AND_DEFERRALS.md`) |
+| Published TypeScript SDK, Prometheus exporter, business-hours behaviour | **Deferred / not applicable** (same document) |

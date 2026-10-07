@@ -13,8 +13,8 @@ unless noted otherwise.
 | `DJANGO_SECRET_KEY` | yes | none (dev falls back to a fixed insecure key) | Generate with `scripts/generate-secrets.sh`. `SECRET_KEY` also accepted (back-compat with the dev `docker-compose.yml`). |
 | `DJANGO_SETTINGS_MODULE` | no | `config.settings` | Same module for every environment — behavior is env-var-driven, not file-per-environment. |
 | `ALLOWED_HOSTS` | yes | `*` in dev | Comma-separated hostnames, no scheme. Refuses `*` or empty in staging/prod. |
-| `CSRF_TRUSTED_ORIGINS` | yes | empty | Comma-separated, full scheme+host (e.g. `https://operator-chat-staging.rastisi.ir`). |
-| `CORS_ALLOWED_ORIGINS` | yes | empty (falls back to allow-all in dev only) | Comma-separated, full scheme+host — every page that embeds the Widget or calls the API from a browser, including the Rastisi storefront. |
+| `CSRF_TRUSTED_ORIGINS` | yes | empty | Comma-separated, full scheme+host (e.g. `https://operator-chat-staging.example.com`). |
+| `CORS_ALLOWED_ORIGINS` | yes | empty (falls back to allow-all in dev only) | Comma-separated, full scheme+host — every page that embeds the Widget or calls the API from a browser, including every host-application site that embeds the widget. |
 | `TIME_ZONE` | no | `UTC` | |
 | `DJANGO_LOG_LEVEL` | no | `INFO` | Applies to this app's own loggers only, not third-party libraries (see `common/middleware.py`/settings `LOGGING`). |
 | `ADMIN_URL` | no | `admin/` | Move the Django admin off the well-known path if desired. |
@@ -27,7 +27,7 @@ unless noted otherwise.
 | `DB_NAME` / `DB_USER` / `DB_PASSWORD` / `DB_HOST` / `DB_PORT` | Used if `DATABASE_URL` is unset. Staging/prod require one or the other. |
 | `DB_CONN_MAX_AGE` | Default `60` (seconds) — persistent connections. |
 
-SQLite is never used outside test runs. Postgres only.
+PostgreSQL is the only supported database (there is no SQLite mode).
 
 ## Redis
 
@@ -187,3 +187,12 @@ staging/production (needs the internal nginx location installed by `scripts/ngin
 `ATTACHMENT_DOWNLOAD_THROTTLE_RATE` (600/min per address) and `ATTACHMENT_URL_THROTTLE_RATE` (300/min per user) throttle fetches and refreshes.
 The nginx side has one install-time switch: `CHAT_ATTACHMENTS_PUBLIC=1` re-opens the old public `/media/attachments/` URLs as a temporary
 compatibility measure (default `0`).
+
+## `INTEGRATION_TOKEN_AUDIENCE`, `INTEGRATION_API_THROTTLE_RATE`, `INTEGRATION_AUTH_FAILURES_PER_MINUTE`
+
+Integration platform (see `docs/integrations/INTEGRATION_CONTRACT_V1.md`, `docs/runbooks/INTEGRATION_PROVISIONING_SECURITY.md`).
+All optional and non-secret — there is **no** shared integration signing secret anywhere in RastiChat's configuration
+(hosts sign with their own Ed25519 private keys; only public keys are stored). `INTEGRATION_TOKEN_AUDIENCE` (`rastichat`) is the
+audience prefix of host tokens (`<audience>:api`, `<audience>:identity`) — use a different value per environment.
+`INTEGRATION_API_THROTTLE_RATE` (`300/min`) is the per-integration request budget; `INTEGRATION_AUTH_FAILURES_PER_MINUTE` (`30`,
+0 = off) caps failed integration authentications per client IP.

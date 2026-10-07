@@ -188,7 +188,7 @@ def clear_entries_cache():
 
 
 def sync_allowed_domains(project, hostnames):
-    """Idempotently merge verified hostnames (e.g. a RastiSi store's verified domains) into the project's list.
+    """Idempotently merge verified hostnames (e.g. a host application tenant's verified domains) into the project's list.
     Returns True if the project changed. Never removes an entry an operator added by hand."""
     current = parse_allowed_domains(project.allowed_domains)
     merged = list(current)

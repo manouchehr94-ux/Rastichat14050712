@@ -15,17 +15,17 @@ also only ever included for a caller presenting the same
 still sees `up: true/false`, just not *why* it's false.
 
 ```bash
-curl -fsS https://chat-staging.rastisi.ir/api/v1/health/ready/ | python3 -m json.tool
+curl -fsS https://chat-staging.example.com/api/v1/health/ready/ | python3 -m json.tool
 # With detail, as an authorized monitoring caller:
 curl -fsS -H "X-Monitoring-Token: $MONITORING_TOKEN" \
-  https://chat-staging.rastisi.ir/api/v1/health/ready/ | python3 -m json.tool
+  https://chat-staging.example.com/api/v1/health/ready/ | python3 -m json.tool
 ```
 
 ## Reading `/health/monitoring/`
 
 ```bash
 curl -fsS -H "X-Monitoring-Token: $MONITORING_TOKEN" \
-  https://chat-staging.rastisi.ir/api/v1/health/monitoring/ | python3 -m json.tool
+  https://chat-staging.example.com/api/v1/health/monitoring/ | python3 -m json.tool
 ```
 
 ```json
@@ -47,6 +47,26 @@ curl -fsS -H "X-Monitoring-Token: $MONITORING_TOKEN" \
 - `backup.stale = true` — no backup within `BACKUP_MAX_AGE_HOURS`
   (default 26h). Run `scripts/staging/backup.sh` and check the cron/timer
   that should be doing this automatically.
+
+## Integration event counters
+
+`/health/monitoring/` also returns `events_last_24h`: counters for the integration platform (and WebSocket authentication),
+bucketed per UTC day in Redis for 14 days. Names are `<event>` or `<event>:<label>`:
+
+| Counter | Meaning / what to do |
+|---|---|
+| `token_refused:<code>` | a host token was refused (`replay`, `invalid_token`, `token_expired`, `binding_mismatch`…). A burst of `replay`/`invalid_*` = attack or clock skew between host and RastiChat; check NTP first |
+| `scope_denied` | a valid key tried something outside its scopes — a host misconfiguration or a stolen key probing |
+| `cross_tenant_denied:<code>` | a request tried to use a tenant it does not own (`tenant_mismatch`, `tenant_unavailable`…). Any non-trivial count deserves a look at the integration |
+| `rate_limited` | an integration or exchange throttle fired |
+| `identity_exchange:customer` / `:staff_*` | successful SSO exchanges (baseline for the refusals above) |
+| `audit:<action>` | every audited operation (tenant provisioned/updated/status changed, role mapped, identity created/disabled, guest upgraded, context updated…) |
+| `conversation_created:customer`, `prechat_submitted`, `support_thread:started|resumed` | product activity |
+| `ws_ticket_issued:<kind>`, `ws_auth:ok|refused` | realtime connects/reconnects; `refused` spikes = expired/replayed tickets or revocation |
+| `widget_config:served` | widget initialisations |
+
+The same events are written one per line to the application log as
+`rastichat_event event=<name> label=<code> k=v …` (never a credential: credential-named fields are dropped).
 
 ## Container-level status
 
@@ -106,7 +126,7 @@ bodies are ever logged (see `common/middleware.py`).
 ## Load baseline
 
 ```bash
-BASE_URL=https://chat-staging.rastisi.ir WS_URL=wss://chat-staging.rastisi.ir/ws \
+BASE_URL=https://chat-staging.example.com WS_URL=wss://chat-staging.example.com/ws \
 PROJECT_KEY=<Project.public_key> VISITOR_COUNT=50 node scripts/staging/load-baseline.mjs
 ```
 

@@ -1,3 +1,4 @@
+/* eslint-disable @typescript-eslint/no-explicit-any -- legacy test file: the vi.mock'd api module is driven through untyped mock handles */
 import { render, screen, waitFor, fireEvent, act } from '@testing-library/react';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import SupportPage from './page';
@@ -10,14 +11,21 @@ vi.mock('@/lib/api', () => ({
   sendSupportMessage: vi.fn(),
   connectSupportWebSocket: vi.fn(() => ({ close: vi.fn() })),
   createSupportRequest: vi.fn(),
+  markSupportRead: vi.fn(),
+  closeSupportConversation: vi.fn(),
+  reopenSupportConversation: vi.fn(),
 }));
 
-import { fetchSupportConversations, fetchSupportMessages, sendSupportMessage, connectSupportWebSocket, createSupportRequest } from '@/lib/api';
+import {
+  fetchSupportConversations, fetchSupportMessages, sendSupportMessage, connectSupportWebSocket, createSupportRequest,
+  markSupportRead, closeSupportConversation, reopenSupportConversation,
+} from '@/lib/api';
 
 describe('Workspace Support Page', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     global.localStorage = { getItem: vi.fn(() => 'token') } as any;
+    (markSupportRead as any).mockResolvedValue(undefined);
   });
 
   it('renders support title', async () => {
@@ -124,12 +132,67 @@ describe('Workspace Support Page', () => {
   it('updates state on close action', async () => {
     (fetchSupportConversations as any).mockResolvedValue([{ id: '1', status: 'CLOSED', subject: 'Closed' }]);
     render(<SupportPage />);
-    await waitFor(() => expect(screen.getByText('CLOSED')).toBeDefined());
+    await waitFor(() => expect(screen.getByText('بسته‌شده')).toBeDefined());
   });
 
   it('updates state on reopen action', async () => {
     (fetchSupportConversations as any).mockResolvedValue([{ id: '1', status: 'WAITING_FOR_PLATFORM', subject: 'Reopened' }]);
     render(<SupportPage />);
-    await waitFor(() => expect(screen.getByText('WAITING_FOR_PLATFORM')).toBeDefined());
+    await waitFor(() => expect(screen.getByText('در انتظار پاسخ پلتفرم')).toBeDefined());
+  });
+
+  describe('platform-initiated threads', () => {
+    const platformStarted = { id: 'p1', status: 'WAITING_FOR_WORKSPACE', subject: 'اطلاعیه پلتفرم', unread_count: 1, opened_by_side: 'PLATFORM' };
+
+    it('shows a thread the platform started, labelled, with the status from the tenant\'s viewpoint', async () => {
+      (fetchSupportConversations as any).mockResolvedValue([platformStarted]);
+      render(<SupportPage />);
+      expect(await screen.findByText('اطلاعیه پلتفرم')).toBeDefined();
+      expect(screen.getByText(/آغاز‌شده توسط پلتفرم/)).toBeDefined();
+      expect(screen.getByText(/در انتظار پاسخ شما/)).toBeDefined();
+    });
+
+    it('opening it marks it read and renders the platform\'s message as theirs and ours as ours', async () => {
+      (fetchSupportConversations as any).mockResolvedValue([platformStarted]);
+      (fetchSupportMessages as any).mockResolvedValue([
+        { id: 'a', content: 'پیام پلتفرم', sender_type: 'USER', sender_side: 'platform' },
+        { id: 'b', content: 'پاسخ ما', sender_type: 'USER', sender_side: 'tenant' },
+      ]);
+      (markSupportRead as any).mockResolvedValue(undefined);
+      render(<SupportPage />);
+      fireEvent.click(await screen.findByText('اطلاعیه پلتفرم'));
+      const theirs = await screen.findByText('پیام پلتفرم');
+      const mine = await screen.findByText('پاسخ ما');
+      await waitFor(() => expect(markSupportRead).toHaveBeenCalledWith('p1'));
+      expect(mine.className).toContain('bg-purple-600');
+      expect(theirs.className).not.toContain('bg-purple-600');
+    });
+
+    it('replying sends the message and shows it as ours immediately', async () => {
+      (fetchSupportConversations as any).mockResolvedValue([platformStarted]);
+      (fetchSupportMessages as any).mockResolvedValue([]);
+      (markSupportRead as any).mockResolvedValue(undefined);
+      (sendSupportMessage as any).mockResolvedValue({});
+      render(<SupportPage />);
+      fireEvent.click(await screen.findByText('اطلاعیه پلتفرم'));
+      fireEvent.change(await screen.findByPlaceholderText('پاسخ...'), { target: { value: 'دریافت شد' } });
+      fireEvent.click(screen.getByText('ارسال'));
+      await waitFor(() => expect(sendSupportMessage).toHaveBeenCalledWith('p1', 'دریافت شد', expect.any(String)));
+      expect((await screen.findByText('دریافت شد')).className).toContain('bg-purple-600');
+    });
+
+    it('closes and reopens a thread', async () => {
+      (fetchSupportConversations as any).mockResolvedValue([platformStarted]);
+      (fetchSupportMessages as any).mockResolvedValue([]);
+      (markSupportRead as any).mockResolvedValue(undefined);
+      (closeSupportConversation as any).mockResolvedValue({ status: 'CLOSED' });
+      (reopenSupportConversation as any).mockResolvedValue({ status: 'WAITING_FOR_PLATFORM' });
+      render(<SupportPage />);
+      fireEvent.click(await screen.findByText('اطلاعیه پلتفرم'));
+      fireEvent.click(await screen.findByRole('button', { name: 'بستن گفتگو' }));
+      await waitFor(() => expect(closeSupportConversation).toHaveBeenCalledWith('p1'));
+      fireEvent.click(await screen.findByRole('button', { name: 'بازگشایی' }));
+      await waitFor(() => expect(reopenSupportConversation).toHaveBeenCalledWith('p1'));
+    });
   });
 });

@@ -6,9 +6,9 @@ bottom; stop as soon as you've found and fixed the cause.
 ## 1. Is it actually down?
 
 ```bash
-curl -fsS -o /dev/null -w '%{http_code}\n' https://chat-staging.rastisi.ir/api/v1/health/ready/
-curl -fsS -o /dev/null -w '%{http_code}\n' https://operator-chat-staging.rastisi.ir/
-curl -fsS -o /dev/null -w '%{http_code}\n' https://platform-chat-staging.rastisi.ir/
+curl -fsS -o /dev/null -w '%{http_code}\n' https://chat-staging.example.com/api/v1/health/ready/
+curl -fsS -o /dev/null -w '%{http_code}\n' https://operator-chat-staging.example.com/
+curl -fsS -o /dev/null -w '%{http_code}\n' https://platform-chat-staging.example.com/
 ```
 
 - All three fail / connection refused -> jump to **2. Host/Nginx**.

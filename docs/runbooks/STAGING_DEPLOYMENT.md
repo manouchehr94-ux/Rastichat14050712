@@ -12,8 +12,8 @@ sudo apt-get install -y docker.io docker-compose-v2 nginx certbot git
 sudo usermod -aG docker "$USER"   # log out/in for this to take effect
 ```
 
-DNS: point `chat-staging.rastisi.ir`, `operator-chat-staging.rastisi.ir`,
-`platform-chat-staging.rastisi.ir` (A records) at the VPS's public IP
+DNS: point `chat-staging.example.com`, `operator-chat-staging.example.com`,
+`platform-chat-staging.example.com` (A records) at the VPS's public IP
 before continuing — `scripts/nginx/issue-certs.sh` refuses to run
 otherwise.
 
@@ -82,7 +82,7 @@ Refuses to run if `ENVIRONMENT=production` — there is no override flag.
 
 ```bash
 scripts/staging/status.sh .env.staging
-curl -fsS https://chat-staging.rastisi.ir/api/v1/health/ready/
+curl -fsS https://chat-staging.example.com/api/v1/health/ready/
 ```
 
 Then run the staging smoke suite (see `e2e/staging-smoke/`):
@@ -90,11 +90,11 @@ Then run the staging smoke suite (see `e2e/staging-smoke/`):
 ```bash
 cd e2e/staging-smoke
 npm install   # first time only — shares @playwright/test with the sibling e2e/ project
-SMOKE_BACKEND_URL=https://chat-staging.rastisi.ir \
-SMOKE_OPERATOR_URL=https://operator-chat-staging.rastisi.ir \
-SMOKE_PLATFORM_URL=https://platform-chat-staging.rastisi.ir \
-SMOKE_WIDGET_URL=https://chat-staging.rastisi.ir/widget.js \
-SMOKE_WS_URL=wss://chat-staging.rastisi.ir/ws \
+SMOKE_BACKEND_URL=https://chat-staging.example.com \
+SMOKE_OPERATOR_URL=https://operator-chat-staging.example.com \
+SMOKE_PLATFORM_URL=https://platform-chat-staging.example.com \
+SMOKE_WIDGET_URL=https://chat-staging.example.com/widget.js \
+SMOKE_WS_URL=wss://chat-staging.example.com/ws \
 SMOKE_PROJECT_KEY=<from seed_staging_data output> \
 SMOKE_OWNER_EMAIL=owner@staging.rastichat.local \
 SMOKE_OWNER_PASSWORD=<from seed_staging_data output> \
@@ -106,12 +106,12 @@ npx playwright test
 ## 8. Widget embed snippet (for the storefront)
 
 ```html
-<script src="https://chat-staging.rastisi.ir/widget.js"></script>
+<script src="https://chat-staging.example.com/widget.js"></script>
 <script>
   window.RastiChat.init({
     projectKey: "<Project.public_key>",
-    apiBase: "https://chat-staging.rastisi.ir/api/v1",
-    wsBase: "wss://chat-staging.rastisi.ir/ws",
+    apiBase: "https://chat-staging.example.com/api/v1",
+    wsBase: "wss://chat-staging.example.com/ws",
   });
 </script>
 ```
@@ -122,8 +122,8 @@ Add the storefront's real origin to `CORS_ALLOWED_ORIGINS` in
 ## Load baseline (optional, informational only)
 
 ```bash
-BASE_URL=https://chat-staging.rastisi.ir \
-WS_URL=wss://chat-staging.rastisi.ir/ws \
+BASE_URL=https://chat-staging.example.com \
+WS_URL=wss://chat-staging.example.com/ws \
 PROJECT_KEY=<Project.public_key> \
 VISITOR_COUNT=50 \
 node scripts/staging/load-baseline.mjs

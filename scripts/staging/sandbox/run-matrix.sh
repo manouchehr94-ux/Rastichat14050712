@@ -1,15 +1,21 @@
 #!/bin/bash
-# Full verification matrix of the COMBINED PR #17 + PR #18 build on the isolated sandbox staging stack (this container only:
+# Full verification matrix of a release candidate (the optional host-adapter stage 07d needs a separate checkout, see RASTISI_DIR) on the isolated
+# sandbox staging stack (this container only:
 # local nginx + TLS on example.test names, own PostgreSQL/Redis, 2 Daphne workers behind a layer-4 balancer, Next dashboards).
-# Nothing here reaches any real host: no VPS, no chatchat.rastisi.ir, no production DB/nginx, no RastiSi.
+# Nothing here reaches any real host: no VPS, no production DB/nginx, no live host application.
 # usage: run-matrix.sh <run-label> [soak-minutes]      evidence -> $SANDBOX_DIR/evidence/final/<run-label>/
 SB="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"; S=${SANDBOX_DIR:?set SANDBOX_DIR, see README.md}; R=$(cd "$SB/../../.." && pwd); PY=${VENV:-/tmp/venv}/bin/python
 RUN=${1:?run label}; SOAK=${2:-30}; E=$S/evidence/final/$RUN; mkdir -p $E
 H=$SB; L=$S/stg/logs
+export SB R   # the staging stages source pw.env in sub-shells, and pw.env needs both
+# NOTHING else may run on this box during a recorded run: the browser stages simulate network outages by signalling the shared balancer,
+# and a concurrent test run (or any other load) corrupts them and the soak
 declare -a NAMES RCS DURS
 ms() { echo $(( $(date +%s%N) / 1000000 )); }
 stage() { # stage <name> <command...>   (command runs in a subshell; its output goes to $E/<name>.log)
   local name=$1; shift; local t=$(ms)
+  # dry-run aid only (never used for a recorded run): SKIP_STAGES="02-backend-tests 08-soak"
+  if [[ " ${SKIP_STAGES:-} " == *" $name "* ]]; then echo "$(date -u +%T) -- $name SKIPPED (SKIP_STAGES)" | tee -a $E/progress.log; NAMES+=("$name (SKIPPED)"); RCS+=(0); DURS+=(0); return; fi
   echo "$(date -u +%T) >> $name" | tee -a $E/progress.log
   ( "$@" ) > $E/$name.log 2>&1 < /dev/null; local rc=$?
   NAMES+=("$name"); RCS+=($rc); DURS+=($(( ($(ms) - t) / 1000 )))
@@ -21,7 +27,8 @@ reset_runtime() { redis-cli -n 5 flushdb >/dev/null; for f in $L/daphne-8101.log
 
 {
   echo "run: $RUN  started $(date -u +%FT%TZ)"
-  echo "tested tree: $(cd $R && git rev-parse HEAD)  (merge of PR#17 head $(cd $R && git rev-parse --short origin/claude/p1-6-private-attachments) + PR#18 head $(cd $R && git rev-parse --short origin/claude/staging-findings))"
+  echo "tested tree: $(cd $R && git rev-parse HEAD)  (tree $(cd $R && git rev-parse HEAD^{tree}))  branch $(cd $R && git branch --show-current)"
+  [ -n "${RASTISI_DIR:-}" ] && echo "RastiSi checkout under test: $(cd $RASTISI_DIR && git rev-parse HEAD)"
   echo "base (main): $(cd $R && git rev-parse --short origin/main)"
   echo "node $(node -v), python $($PY -V 2>&1), nginx $(nginx -v 2>&1 | cut -d/ -f2), postgres $(psql --version | awk '{print $3}'), redis $(redis-server -v | awk '{print $3}' | cut -d= -f2)"
   echo "playwright $(cd $R/e2e && npx playwright --version), chromium $(/opt/pw-browsers/chromium-1194/chrome-linux/chrome --version 2>/dev/null)"
@@ -31,9 +38,12 @@ reset_runtime() { redis-cli -n 5 flushdb >/dev/null; for f in $L/daphne-8101.log
 stage 00-preflight bash -c ". $S/stg/backend.env; export DJANGO52_ISOLATED_STAGING=yes-this-is-an-isolated-staging-stack DB_HOST=127.0.0.1 PYTHON=$PY PATH=${VENV:-/tmp/venv}/bin:\$PATH; cd $R && bash scripts/staging/django52-preflight.sh"
 stage 01-migrate-empty-db bash -c ". $S/stg/backend.env; su postgres -c 'dropdb --if-exists rasti_fresh'; su postgres -c 'createdb -O rasti rasti_fresh'; cd $R/backend && DATABASE_URL=postgres://rasti:rasti@127.0.0.1/rasti_fresh $PY manage.py migrate --noinput | tail -5 && DATABASE_URL=postgres://rasti:rasti@127.0.0.1/rasti_fresh $PY manage.py migrate --check; rc=\$?; su postgres -c 'dropdb --if-exists rasti_fresh'; exit \$rc"
 
+stage 01b-migrate-upgrade-existing-data bash $SB/upgrade-migration.sh
+
 # ---------------------------------------------------------------- unit / integration
 stage 02-backend-tests bash -c "export DATABASE_URL=postgres://rasti:rasti@127.0.0.1/rasti REDIS_URL=redis://127.0.0.1:6379/0 DJANGO_SECRET_KEY=test-secret-key-for-local-only-xxxxxxxxxxxxxxxxxxxxxxxx; unset ENVIRONMENT DJANGO_SETTINGS_MODULE MONITORING_TOKEN; cd $R/backend && $PY manage.py test --parallel 4 --noinput"
-stage 03-js-unit-and-typecheck bash -c "set -e; for d in packages/widget apps/operator-dashboard apps/platform-dashboard; do echo \"=== \$d\"; (cd $R/\$d && npx vitest run 2>&1 | tail -8 && npx tsc --noEmit && echo 'typecheck ok'); done"
+stage 02b-security-checks bash -c "set -e; cd $R/backend; $PY manage.py makemigrations --check --dry-run | tail -1; \$(dirname $PY)/bandit -r . -x './*/tests*.py,./*/migrations/*,./venv' -ll -q && echo 'bandit: clean'; \$(dirname $PY)/pip-audit -r requirements.txt | tail -2; cd $R; if command -v gitleaks >/dev/null; then gitleaks detect --source . --config .gitleaks.toml --no-banner --redact -v --log-opts 'origin/main..HEAD' && echo 'gitleaks: clean'; else echo 'gitleaks not installed: regex scan of the stack diff'; ! git diff origin/main...HEAD | grep -E '^\\+' | grep -nE 'BEGIN (RSA |EC |OPENSSH |)PRIVATE KEY|AKIA[0-9A-Z]{16}|ghp_[A-Za-z0-9]{20,}|sk-[A-Za-z0-9]{20,}|xox[bp]-' && echo 'regex secret scan: clean'; fi"
+stage 03-js-unit-lint-typecheck-build bash -c "set -e; for d in packages/widget apps/operator-dashboard apps/platform-dashboard; do echo \"=== \$d\"; (cd $R/\$d && npx vitest run 2>&1 | tail -6 && npx tsc --noEmit && echo 'typecheck ok' && if [ \$d = packages/widget ]; then npm run lint 2>&1 | tail -2; else npm run lint:baseline 2>&1 | tail -2; fi); done; for d in apps/operator-dashboard apps/platform-dashboard; do (cd $R/\$d && npx next build >/dev/null 2>&1 && echo \"build ok: \$d\"); done; (cd $R && git checkout -q -- apps/operator-dashboard/AGENTS.md apps/platform-dashboard/AGENTS.md 2>/dev/null; true)"
 stage 03b-build-widget bash -c "cd $R/packages/widget && npx vite build && cp dist/widget.iife.js /srv/stg/widgetroot/widget.js && ls -l /srv/stg/widgetroot/widget.js"
 stage 04-nginx-media-routing bash $R/scripts/nginx/test-media-routing.sh
 stage 05-nginx-log-redaction bash $R/scripts/nginx/test-log-redaction.sh
@@ -44,16 +54,24 @@ stage 06-stack-health bash -c "for u in https://chat-stg.example.test/api/v1/hea
 # the REAL limiter is proven first (30 parallel bad logins -> 503s). The functional browser suite then runs with ONLY the login zone relaxed
 # (10r/m -> 600r/m): it legitimately performs >10 logins per minute from one address, which the production limit rightly refuses.
 stage 06b-login-rate-limit-enforced bash $H/loginlimit.sh
-relax_login_limit() { sed -i 's#zone=rastichat_login:10m rate=10r/m#zone=rastichat_login:10m rate=600r/m#' /etc/nginx/conf.d/rastichat-limits.conf; nginx -s stop; sleep 1; nginx; sleep 1; }
+# the functional browser suites run from ONE address and legitimately exceed both per-address limits (10 logins/min, 30 WebSocket handshakes/min):
+# each limit is proven enforced with the real config first (06b, 06c), then relaxed for those stages only and restored afterwards
+relax_login_limit() { sed -i -e 's#zone=rastichat_login:10m rate=10r/m#zone=rastichat_login:10m rate=600r/m#' -e 's#zone=rastichat_ws_connect:10m rate=30r/m#zone=rastichat_ws_connect:10m rate=1800r/m#' /etc/nginx/conf.d/rastichat-limits.conf; nginx -s stop; sleep 1; nginx; sleep 1; }
 real_login_limit() { cp $R/deploy/nginx/conf.d/rastichat-limits.conf /etc/nginx/conf.d/rastichat-limits.conf; nginx -s stop; sleep 1; nginx; sleep 1; }
-relax_login_limit; echo "login zone relaxed for the functional suite: $(grep -o 'zone=rastichat_login[^;]*' /etc/nginx/conf.d/rastichat-limits.conf)" >> $E/progress.log
+stage 06c-ws-connect-limiter-enforced bash $H/wslimit.sh
+relax_login_limit; echo "limit zones relaxed for the functional suites: $(grep -oE 'zone=rastichat_(login|ws_connect)[^;]*' /etc/nginx/conf.d/rastichat-limits.conf | tr '\n' ' ')" >> $E/progress.log
 reset_runtime   # logs the review stage reads start here (after the stack is healthy, so restart noise is not counted)
 stage 07-playwright-all-projects bash -c "PLAYWRIGHT_JSON_OUTPUT_NAME=$E/playwright-results.json $SB/pw.sh $E/playwright-raw.log --retries=0 --reporter=list,json --timeout=90000; cat $E/playwright-raw.log | tail -60; tail -1 $E/playwright-raw.log | grep -qx 'exit=0'"
+stage 07b-integration-contract-staging bash -c ". $SB/pw.env; cd $R/e2e && npx playwright test -c integration-staging/playwright.config.ts --reporter=list 2>&1 | tail -40; test \${PIPESTATUS[0]} -eq 0"
+stage 07c-reference-host-e2e-on-staging bash -c ". $SB/pw.env; export STACK=staging E2E_PYTHON=$PY PW_CHROMIUM=\$PW_CHROMIUM_PATH; cd $R && bash e2e/reference-host/run.sh --reporter=list 2>&1 | tail -40; test \${PIPESTATUS[0]} -eq 0"
+if [ -n "${RASTISI_DIR:-}" ]; then  # optional stage: the first real host adapter needs its own checkout (RASTISI_DIR) and venv (SI_PYTHON)
+stage 07d-rastisi-cross-system-e2e-on-staging bash -c ". $SB/pw.env; export STACK=staging E2E_PYTHON=$PY SI_PYTHON=${SI_PYTHON:?set SI_PYTHON (RastiSi venv python)} RASTISI_DIR=${RASTISI_DIR:?set RASTISI_DIR (RastiSi checkout at the PR tip)} PW_CHROMIUM=\$PW_CHROMIUM_PATH; cd $R && bash e2e/rastisi/run.sh --reporter=list 2>&1 | tail -40; test \${PIPESTATUS[0]} -eq 0"
+else echo "07d skipped: RASTISI_DIR not set (optional host-adapter stage)" >> $E/progress.log; fi
 real_login_limit; echo "login zone restored to the repo value: $(grep -o 'zone=rastichat_login[^;]*' /etc/nginx/conf.d/rastichat-limits.conf)" >> $E/progress.log
 
 # ---------------------------------------------------------------- soak (alone on the stack; 120 s cool-down so the nginx WebSocket-connect limiter
 # (30 r/min, burst 10 per address) is not still charged by the browser suite)
-stage 07b-cooldown sleep 120
+stage 07e-cooldown sleep 120
 stage 08-soak bash -c ". $SB/pw.env; cd $H && SOAK_MINUTES=$SOAK SOAK_OUT=$E/soak.json node soak.mjs"
 
 # ---------------------------------------------------------------- logs of everything above

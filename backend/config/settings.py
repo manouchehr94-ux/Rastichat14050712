@@ -87,7 +87,7 @@ ALLOWED_HOSTS = _env_list('ALLOWED_HOSTS', default='*' if not IS_PRODUCTION_LIKE
 if IS_PRODUCTION_LIKE and (not ALLOWED_HOSTS or '*' in ALLOWED_HOSTS):
     raise ImproperlyConfigured(
         'ALLOWED_HOSTS must be a non-empty, non-wildcard comma-separated list of hostnames '
-        'when ENVIRONMENT is staging or production (e.g. "chat-staging.rastisi.ir").'
+        'when ENVIRONMENT is staging or production (e.g. "chat-staging.example.com").'
     )
 # backend/Dockerfile.prod's own HEALTHCHECK (and docker-compose.staging.yml's
 # depends_on: backend: condition: service_healthy, which operator-dashboard/
@@ -106,7 +106,7 @@ CSRF_TRUSTED_ORIGINS = _env_list('CSRF_TRUSTED_ORIGINS')
 if IS_PRODUCTION_LIKE and not CSRF_TRUSTED_ORIGINS:
     raise ImproperlyConfigured(
         'CSRF_TRUSTED_ORIGINS must be set when ENVIRONMENT is staging or production '
-        '(e.g. "https://operator-chat-staging.rastisi.ir,https://platform-chat-staging.rastisi.ir").'
+        '(e.g. "https://operator-chat-staging.example.com,https://platform-chat-staging.example.com").'
     )
 
 # The widget sends its session credential in this header (instead of the URL) —
@@ -161,6 +161,7 @@ INSTALLED_APPS = [
     'automations',
     'knowledge_base',
     'macros',
+    'integrations',
 ]
 
 MIDDLEWARE = [
@@ -528,6 +529,9 @@ REST_FRAMEWORK = {
         'widget_start': None if TESTING else os.environ.get('WIDGET_START_THROTTLE_RATE', '20/min'),
         'widget_message': None if TESTING else os.environ.get('WIDGET_MESSAGE_THROTTLE_RATE', '60/min'),
         'support_write': None if TESTING else os.environ.get('SUPPORT_WRITE_THROTTLE_RATE', '60/min'),
+        'identity_exchange': None if TESTING else os.environ.get('IDENTITY_EXCHANGE_THROTTLE_RATE', '60/min'),
+        'integration_api': None if TESTING else os.environ.get('INTEGRATION_API_THROTTLE_RATE', '300/min'),
+        'widget_config': None if TESTING else os.environ.get('WIDGET_CONFIG_THROTTLE_RATE', '120/min'),
         'widget_init': None if TESTING else os.environ.get('WIDGET_INIT_THROTTLE_RATE', '30/min'),
         'ws_ticket': None if TESTING else os.environ.get('WS_TICKET_THROTTLE_RATE', '120/min'),
         'widget_session': None if TESTING else os.environ.get('WIDGET_SESSION_THROTTLE_RATE', '30/min'),
@@ -654,3 +658,22 @@ LOGGING = {
         'rastichat': {'handlers': ['console'], 'level': LOG_LEVEL, 'propagate': False},
     },
 }
+
+# ---------------------------------------------------------------------------
+# Integration platform (docs/integrations/INTEGRATION_CONTRACT_V1.md)
+#
+# Hosts sign short-lived JWTs (Ed25519) that RastiChat verifies against the PUBLIC keys registered for their
+# integration. These settings are non-secret; there is deliberately no shared signing secret anywhere in RastiChat's
+# configuration (and the Django SECRET_KEY is never used for integration tokens).
+# ---------------------------------------------------------------------------
+# Tokens are audience-bound to this deployment and purpose ("<audience>:api", "<audience>:identity"), so a token
+# minted for staging is worthless on production even for a host that reuses a key.
+INTEGRATION_TOKEN_AUDIENCE = os.environ.get('INTEGRATION_TOKEN_AUDIENCE', 'rastichat').strip() or 'rastichat'
+INTEGRATION_TOKEN_MAX_TTL_SECONDS = {'api': 60, 'identity': 120}
+INTEGRATION_TOKEN_LEEWAY_SECONDS = 5
+# Lifetime of the dashboard access token issued by staff SSO. No refresh token is issued: the host's next assertion
+# is the renewal, so a staff member removed on the host side is cut off within this window even if no revocation
+# call was made (REST/WS membership checks are immediate when it was).
+INTEGRATION_STAFF_SESSION_MINUTES = int(os.environ.get('INTEGRATION_STAFF_SESSION_MINUTES', 30))
+# Failed integration authentications per client IP per minute before further attempts get 429 (0 = off).
+INTEGRATION_AUTH_FAILURES_PER_MINUTE = 0 if TESTING else int(os.environ.get('INTEGRATION_AUTH_FAILURES_PER_MINUTE', 30))

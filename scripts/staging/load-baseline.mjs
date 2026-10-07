@@ -10,8 +10,8 @@
 // install, so it can run directly on the VPS or from a laptop against it.
 //
 // Usage:
-//   BASE_URL=https://chat-staging.rastisi.ir \
-//   WS_URL=wss://chat-staging.rastisi.ir/ws \
+//   BASE_URL=https://chat-staging.example.com \
+//   WS_URL=wss://chat-staging.example.com/ws \
 //   PROJECT_KEY=<Project.public_key> \
 //   VISITOR_COUNT=50 MESSAGES_PER_VISITOR=3 \
 //   OPERATOR_CREDENTIALS="email1:pass1,email2:pass2" \

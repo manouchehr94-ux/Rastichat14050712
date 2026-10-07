@@ -14,6 +14,7 @@ class Notification(models.Model):
         SLA_BREACHED = 'SLA_BREACHED', 'SLA breached'
         ESCALATION_RECEIVED = 'ESCALATION_RECEIVED', 'Escalation received'
         AUTOMATION_TRIGGERED = 'AUTOMATION_TRIGGERED', 'Automation notification'
+        SUPPORT_MESSAGE = 'SUPPORT_MESSAGE', 'Support message'
 
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     recipient = models.ForeignKey(

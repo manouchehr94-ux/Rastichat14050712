@@ -55,6 +55,26 @@ class Conversation(models.Model):
 
     ACTIVE_STATUSES = (Status.OPEN, Status.PENDING, Status.WAITING_FOR_WORKSPACE, Status.WAITING_FOR_PLATFORM)
 
+    class Side(models.TextChoices):
+        TENANT = 'TENANT', 'Tenant'
+        PLATFORM = 'PLATFORM', 'Platform'
+
+    # PLATFORM_SUPPORT conversations: which side opened the thread, and an optional stable key that makes
+    # "start or resume" idempotent (at most ONE active thread per workspace + key). Empty on legacy rows / customer chats.
+    # db_default: the DATABASE supplies the neutral value too, so the PREVIOUS release (which does not know these columns) keeps working
+    # against a migrated schema — rolling the code back never requires reversing the migration (expand/contract discipline)
+    opened_by_side = models.CharField(max_length=10, choices=Side.choices, blank=True, default='', db_default='')
+    subject_key = models.CharField(max_length=64, blank=True, default='', db_default='')
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(
+                fields=['workspace', 'subject_key'], name='uniq_active_support_thread',
+                condition=models.Q(type='PLATFORM_SUPPORT') & ~models.Q(subject_key='')
+                & models.Q(status__in=['OPEN', 'PENDING', 'WAITING_FOR_WORKSPACE', 'WAITING_FOR_PLATFORM']),
+            ),
+        ]
+
 
 class PriorityChange(models.Model):
     class Reason(models.TextChoices):
@@ -143,3 +163,16 @@ class Assignment(models.Model):
 
     class Meta:
         ordering = ['-created_at']
+
+
+class PreChatSubmission(models.Model):
+    """The answers a visitor gave to the project's pre-chat form when starting this conversation.
+
+    Structured, not columns: `answers` is `[{key, label, type, value, source}]` with the question labels snapshotted at
+    submit time (so editing the form later never rewrites history). `source` is `visitor` for typed answers and
+    `client` for hidden context supplied by the embedding page (never trusted as identity). Operator-side data.
+    """
+    conversation = models.OneToOneField(Conversation, on_delete=models.CASCADE, related_name='pre_chat')
+    answers = models.JSONField(default=list)
+    config_version = models.PositiveSmallIntegerField(default=1)
+    created_at = models.DateTimeField(auto_now_add=True)

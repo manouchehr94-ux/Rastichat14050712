@@ -2,19 +2,75 @@ export {};
 
 declare global {
     interface Window {
-        RastiChat: { init: (config: RastiChatConfig) => void; logout: () => Promise<void> };
+        RastiChat: {
+            init: (config: RastiChatConfig) => void; logout: () => Promise<void>;
+            open: () => void; close: () => void; refreshVisibility: () => void; destroy: () => void;
+        };
     }
 }
 
 interface RastiChatConfig {
     projectKey: string;
+    /** Explicit overrides of the remotely managed launcher configuration (leave unset to follow the project's configuration). */
     position?: 'left' | 'right';
     primaryColor?: string;
+    /**
+     * Trusted identity bootstrap. Called by the widget whenever it needs a session; it must ask THIS host's own backend for
+     * a fresh short-lived identity assertion (Integration Contract v1 §7) and return it, or return null for a guest.
+     * Never put an assertion, user id or role in markup: the browser only relays what the host backend signed.
+     */
+    bootstrap?: () => Promise<string | null | undefined>;
+    /** Page context for the project's `hidden` pre-chat fields (e.g. `{ page: location.pathname }`). Untrusted by the server. */
+    context?: Record<string, string>;
     /** Base REST URL, e.g. "https://chat.example.com/api/v1". Defaults to localhost for local development. */
     apiBase?: string;
     /** Base WebSocket URL, e.g. "wss://chat.example.com/ws". Defaults to localhost for local development. */
     wsBase?: string;
 }
+
+type PreChatFieldType = 'text' | 'textarea' | 'email' | 'phone' | 'select' | 'radio' | 'checkbox' | 'consent' | 'hidden';
+
+interface PreChatField {
+    key: string;
+    type: PreChatFieldType;
+    label: string;
+    placeholder?: string;
+    required?: boolean;
+    max_length?: number | null;
+    choices?: { value: string; label: string }[];
+}
+
+/** `GET /widget/config/` (version 1). Anything unrecognised makes the widget fall back to its legacy behaviour. */
+interface RemoteConfig {
+    version: 1;
+    launcher: {
+        enabled: boolean; mode: 'icon' | 'icon_text'; position: 'bottom-right' | 'bottom-left'; offset: { x: number; y: number };
+        label: string; tooltip: string; icon: string; color: string; greeting: string; auto_open: boolean; mobile: { fullscreen: boolean };
+    };
+    visibility: { hide_on_paths: string[]; show_on_paths: string[] };
+    behavior: { start_mode: 'on_load' | 'on_open' | 'on_first_message' };
+    pre_chat: { enabled: boolean; title: string; submit_label: string; fields: PreChatField[] };
+    identity: { guest_allowed: boolean; authenticated_only: boolean };
+    locale: 'fa' | 'en';
+    direction: 'rtl' | 'ltr';
+    capabilities: { attachments: boolean; voice: boolean; emoji: boolean; rating: boolean };
+}
+
+const ICONS: Record<string, string> = { chat: '💬', help: '❓', headset: '🎧', mail: '✉️', sparkle: '✨' };
+
+// Strings for the parts of the widget that are driven by remote configuration (the original chat strings stay as they were).
+const STRINGS = {
+    fa: {
+        startChat: 'شروع گفتگو', required: 'این فیلد الزامی است.', invalidEmail: 'ایمیل معتبر وارد کنید.', invalidPhone: 'شماره تلفن معتبر وارد کنید.',
+        unavailable: 'پشتیبانی موقتاً در دسترس نیست. کمی بعد دوباره تلاش کنید.', signIn: 'برای گفتگو ابتدا وارد حساب کاربری خود شوید.',
+        preChatTitle: 'قبل از شروع گفتگو', choose: 'انتخاب کنید…', launcherLabel: 'گفتگوی آنلاین', close: 'بستن', formError: 'لطفاً خطاهای فرم را اصلاح کنید.',
+    },
+    en: {
+        startChat: 'Start chat', required: 'This field is required.', invalidEmail: 'Enter a valid email address.', invalidPhone: 'Enter a valid phone number.',
+        unavailable: 'Support is temporarily unavailable. Please try again shortly.', signIn: 'Please sign in to chat with us.',
+        preChatTitle: 'Before we start', choose: 'Choose…', launcherLabel: 'Chat with us', close: 'Close', formError: 'Please fix the errors in the form.',
+    },
+};
 
 interface MessageMetadata {
     caption?: string;
@@ -125,7 +181,28 @@ class RastiChatWidget {
     private branding: Branding | null = null;
     private recoveringSession = false;
 
+    // --- remotely managed configuration (launcher, start behaviour, pre-chat, identity policy) ---
+    private offsetX = 20;
+    private offsetY = 20;
+    private direction: 'rtl' | 'ltr' = 'rtl';
+    private strings = STRINGS.fa;
+    private remote: RemoteConfig | null = null;
+    private explicit = { position: false, primaryColor: false };
+    private startMode: 'on_load' | 'on_open' | 'on_first_message' = 'on_load';
+    private styleEl!: HTMLStyleElement;
+    private greetingEl!: HTMLElement;
+    private prechatEl!: HTMLElement;
+    private preChatAnswers: Record<string, string | boolean> | null = null;
+    private preChatDone = false;
+    private startingChat: Promise<void> | null = null;
+    /** false while the first session/conversation setup (initSession) is still running; a send during that window is queued, never dropped */
+    private initDone = false;
+    private unavailable = false;
+    private destroyed = false;
+    private listeners: { target: EventTarget; type: string; fn: EventListener }[] = [];
+
     constructor(config: RastiChatConfig) {
+        this.explicit = { position: !!config.position, primaryColor: !!config.primaryColor };
         this.config = { position: 'right', primaryColor: '#BC5A38', ...config };
         if (config.apiBase) this.apiBase = config.apiBase.replace(/\/$/, '');
         if (config.wsBase) this.wsBase = config.wsBase.replace(/\/$/, '');
@@ -135,7 +212,127 @@ class RastiChatWidget {
 
         this.initUI();
         this.initEvents();
-        this.initSession();
+        void this.boot();
+    }
+
+    // ------------------------------------------------------------------------------------ remote configuration
+    private async boot() {
+        this.remote = await this.fetchRemoteConfig();
+        if (this.destroyed) return;
+        this.applyRemoteConfig();
+        if (this.remote && !this.remote.launcher.enabled) return; // disabled for this project: no session, no network
+        await this.initSession();
+    }
+
+    private async fetchRemoteConfig(): Promise<RemoteConfig | null> {
+        try {
+            const res = await fetch(`${this.apiBase}/widget/config/?project_key=${encodeURIComponent(this.config.projectKey)}`);
+            if (!res.ok) return null;
+            const data = await res.json();
+            return data && data.version === 1 && data.launcher && data.behavior && data.pre_chat && data.identity ? (data as RemoteConfig) : null;
+        } catch {
+            return null; // an unreachable/old server must never break the widget: legacy behaviour applies
+        }
+    }
+
+    private applyRemoteConfig() {
+        const r = this.remote;
+        if (!r) return;
+        const l = r.launcher;
+        this.strings = STRINGS[r.locale] ?? STRINGS.fa;
+        this.direction = r.direction === 'ltr' ? 'ltr' : 'rtl';
+        if (!this.explicit.position) this.config.position = l.position === 'bottom-left' ? 'left' : 'right';
+        if (!this.explicit.primaryColor) this.config.primaryColor = l.color;
+        this.offsetX = l.offset.x;
+        this.offsetY = l.offset.y;
+        this.styleEl.textContent = this.css();
+        this.startMode = r.pre_chat.enabled && r.behavior.start_mode === 'on_load' ? 'on_first_message' : r.behavior.start_mode;
+
+        const label = l.mode === 'icon_text' ? (l.label || this.strings.launcherLabel) : '';
+        this.launcher.querySelector('.rasti-l-icon')!.textContent = ICONS[l.icon] ?? ICONS.chat;
+        const labelEl = this.launcher.querySelector('.rasti-l-label') as HTMLElement;
+        labelEl.textContent = label;
+        this.launcher.classList.toggle('has-label', !!label);
+        const name = l.tooltip || l.label || this.strings.launcherLabel;
+        this.launcher.setAttribute('aria-label', name);
+        this.launcher.title = l.tooltip || '';
+        this.panel.setAttribute('aria-label', name);
+        this.panel.classList.toggle('rasti-sheet', !l.mobile.fullscreen);
+        if (!r.capabilities.attachments) document.getElementById('rasti-attach-btn')!.style.display = 'none';
+        if (!r.capabilities.voice) this.micBtn.style.display = 'none';
+        if (!r.capabilities.emoji) document.getElementById('rasti-emoji-btn')!.style.display = 'none';
+        this.inputField.placeholder = r.locale === 'en' ? 'Type your message…' : 'پیام خود را بنویسید...';
+
+        this.updateVisibility();
+        this.showGreeting(l.greeting);
+        const mobile = typeof window.matchMedia === 'function' && window.matchMedia('(max-width: 480px)').matches;
+        if (l.auto_open && !(mobile && l.mobile.fullscreen) && this.safeSession('get', 'rasti_autoopened') !== '1') {
+            this.safeSession('set', 'rasti_autoopened', '1');
+            this.togglePanel(true);
+        }
+    }
+
+    private safeSession(op: 'get' | 'set', key: string, value = ''): string | null {
+        try {
+            if (op === 'set') { sessionStorage.setItem(key, value); return null; }
+            return sessionStorage.getItem(key);
+        } catch { return null; } // storage can be blocked (private mode, sandboxed frames)
+    }
+
+    private pathMatches(pattern: string, path: string): boolean {
+        const re = new RegExp('^' + pattern.replace(/[.+?^${}()|[\]\\]/g, '\\$&').replace(/\*/g, '.*') + '$');
+        return re.test(path);
+    }
+
+    /** Hide/show rules (`visibility.*_paths`) — re-evaluated on navigation (`popstate`) and by `RastiChat.refreshVisibility()`. */
+    public updateVisibility() {
+        const r = this.remote;
+        let visible = true;
+        if (r) {
+            const path = window.location.pathname;
+            const show = r.visibility?.show_on_paths ?? [];
+            const hide = r.visibility?.hide_on_paths ?? [];
+            visible = r.launcher.enabled && (show.length === 0 || show.some(p => this.pathMatches(p, path))) && !hide.some(p => this.pathMatches(p, path));
+        }
+        this.container.style.display = visible ? '' : 'none';
+        if (!visible && this.isOpen) this.togglePanel(false);
+    }
+
+    private showGreeting(text: string) {
+        if (!text || this.isOpen || this.safeSession('get', 'rasti_greeted') === '1') return;
+        this.greetingEl.querySelector('.rasti-g-text')!.textContent = text;
+        this.greetingEl.hidden = false;
+    }
+
+    private hideGreeting() {
+        if (this.greetingEl.hidden) return;
+        this.greetingEl.hidden = true;
+        this.safeSession('set', 'rasti_greeted', '1');
+    }
+
+    private setUnavailable(text: string) {
+        this.unavailable = true;
+        this.launcher.classList.add('rasti-unavailable');
+        this.noticeEl.textContent = text;
+        this.noticeEl.classList.add('show');
+    }
+
+    public setOpen(open: boolean) {
+        if (this.container.style.display === 'none') return;
+        this.togglePanel(open);
+    }
+
+    public destroy() {
+        this.destroyed = true;
+        window.clearTimeout(this.reconnectTimer);
+        window.clearTimeout(this.noticeHideTimer);
+        window.clearTimeout(this.typingHideTimer);
+        window.clearInterval(this.recordTimer);
+        this.dropSocket();
+        for (const l of this.listeners) l.target.removeEventListener(l.type, l.fn);
+        this.listeners = [];
+        document.body.style.overflow = '';
+        this.container.remove();
     }
 
     private loadFont() {
@@ -148,29 +345,51 @@ class RastiChatWidget {
         document.head.appendChild(link);
     }
 
-    private initUI() {
-        this.loadFont();
+    /** Positioning/colour tokens come from `config` (explicit overrides) or the remote configuration, so this is regenerated when it arrives. */
+    private css(): string {
         const pos = this.config.position;
-        this.container.innerHTML = `
-            <style>
+        const offX = this.offsetX;
+        const offY = this.offsetY;
+        return `
                 /* Design tokens mirrored from docs/product/DESIGN_TOKENS.md — keep in sync with apps/operator-dashboard/src/app/globals.css */
                 #rasti-container * { box-sizing: border-box; font-family: 'Vazirmatn', Tahoma, Arial, sans-serif; }
-                #rasti-container { direction: rtl; }
+                #rasti-container { direction: ${this.direction}; }
                 #rasti-launcher {
-                    position: fixed; bottom: 20px; ${pos}: 20px;
+                    position: fixed; bottom: ${offY}px; ${pos}: ${offX}px;
                     width: 60px; height: 60px; background: ${this.config.primaryColor};
                     border-radius: 50%; cursor: pointer; box-shadow: 0 6px 18px rgba(0,0,0,0.25);
                     display: flex; align-items: center; justify-content: center; color: white; font-size: 26px; z-index: 9998;
                     transition: transform .15s;
                 }
                 #rasti-launcher:hover { transform: scale(1.06); }
+                #rasti-launcher.has-label { width: auto; padding: 0 20px; border-radius: 30px; gap: 8px; font-size: 20px; }
+                #rasti-launcher .rasti-l-label { font-size: 14px; font-weight: 600; }
+                #rasti-launcher:focus-visible, #rasti-panel button:focus-visible, #rasti-panel input:focus-visible, #rasti-panel select:focus-visible, #rasti-panel textarea:focus-visible { outline: 3px solid #1a73e8; outline-offset: 2px; }
+                #rasti-launcher.rasti-unavailable { filter: grayscale(1); opacity: .75; }
+                #rasti-greeting { position: fixed; bottom: ${offY + 70}px; ${pos}: ${offX}px; max-width: min(260px, calc(100vw - 40px)); background: #fff; color: #2C211A; border: 1px solid #ECDCC8; border-radius: 14px; padding: 10px 30px 10px 14px; font-size: 13px; line-height: 1.7; box-shadow: 0 10px 28px rgba(0,0,0,.18); z-index: 9997; cursor: pointer; }
+                #rasti-greeting[hidden] { display: none; }
+                #rasti-greeting .rasti-g-x { position: absolute; top: 4px; ${pos === 'right' ? 'left' : 'right'}: 6px; background: none; border: none; cursor: pointer; font-size: 14px; color: #A08C77; }
+                #rasti-prechat { display: none; flex: 1; overflow-y: auto; padding: 16px; background: #FBF4EB; }
+                #rasti-panel.rasti-prechat-on #rasti-prechat { display: block; }
+                #rasti-panel.rasti-prechat-on #rasti-messages, #rasti-panel.rasti-prechat-on #rasti-quick, #rasti-panel.rasti-prechat-on #rasti-input-area { display: none; }
+                #rasti-prechat h2 { font-size: 14px; margin: 0 0 12px; color: #2C211A; }
+                .rasti-field { margin-bottom: 12px; }
+                .rasti-field label, .rasti-field legend { display: block; font-size: 12px; font-weight: 600; margin-bottom: 4px; color: #5C4A3A; padding: 0; }
+                .rasti-field input[type=text], .rasti-field input[type=email], .rasti-field input[type=tel], .rasti-field select, .rasti-field textarea { width: 100%; border: 1.5px solid #ECDCC8; border-radius: 10px; padding: 8px 10px; font-size: 13px; background: #fff; color: #2C211A; }
+                .rasti-field textarea { min-height: 70px; resize: vertical; }
+                .rasti-field fieldset { border: none; margin: 0; padding: 0; }
+                .rasti-field .rasti-inline { display: flex; align-items: center; gap: 6px; font-size: 12.5px; font-weight: 400; margin-bottom: 4px; }
+                .rasti-field .rasti-err { color: #8a2f22; font-size: 11.5px; margin-top: 3px; }
+                .rasti-field [aria-invalid=true] { border-color: #C0504A; }
+                #rasti-prechat .rasti-submit { width: 100%; background: ${this.config.primaryColor}; color: #fff; border: none; border-radius: 12px; padding: 10px; font-size: 13.5px; font-weight: 600; cursor: pointer; }
+                #rasti-prechat .rasti-form-err { color: #8a2f22; font-size: 12px; margin-bottom: 8px; }
                 #rasti-launcher .rasti-badge {
                     position: absolute; top: -4px; ${pos === 'right' ? 'left' : 'right'}: -4px; background: #C0504A; color: #fff;
                     font-size: 11px; font-weight: 700; min-width: 19px; height: 19px; border-radius: 999px;
                     display: none; align-items: center; justify-content: center; padding: 0 4px; border: 2px solid #fff;
                 }
                 #rasti-panel {
-                    position: fixed; bottom: 92px; ${pos}: 20px;
+                    position: fixed; bottom: ${offY + 72}px; ${pos}: ${offX}px;
                     width: 360px; height: 520px; max-height: calc(100vh - 120px); background: #FAF3EA; border-radius: 18px;
                     box-shadow: 0 20px 50px rgba(0,0,0,0.28); display: none; flex-direction: column; z-index: 9999; overflow: hidden;
                     border: 1px solid #ECDCC8;
@@ -277,7 +496,8 @@ class RastiChatWidget {
                 .rasti-act.rasti-cancel-rec.show { display: flex; }
                 @media (max-width: 480px) {
                     #rasti-launcher { bottom: max(16px, env(safe-area-inset-bottom)); }
-                    #rasti-panel {
+                    #rasti-panel.rasti-sheet { width: calc(100vw - 16px); height: min(520px, calc(100dvh - 90px)); bottom: 80px; ${pos}: 8px; border-radius: 18px; border: 1px solid #ECDCC8; }
+                    #rasti-panel:not(.rasti-sheet) {
                         width: 100vw; height: 100dvh; max-height: 100dvh; bottom: 0; ${pos}: 0;
                         border-radius: 0; border: none;
                     }
@@ -289,17 +509,25 @@ class RastiChatWidget {
                     .rasti-bubble.rasti-voice { min-width: min(170px, 60vw); }
                 }
                 .rasti-pop { width: min(240px, calc(100vw - 20px)); }
-            </style>
-            <div id="rasti-launcher">💬<span class="rasti-badge" id="rasti-badge"></span></div>
-            <div id="rasti-panel">
+        `;
+    }
+
+    private initUI() {
+        this.loadFont();
+        this.container.innerHTML = `
+            <style id="rasti-style">${this.css()}</style>
+            <div id="rasti-greeting" role="status" hidden><span class="rasti-g-text"></span><button type="button" class="rasti-g-x" aria-label="✕">✕</button></div>
+            <div id="rasti-launcher" role="button" tabindex="0" aria-label="گفتگوی آنلاین" aria-expanded="false" aria-controls="rasti-panel"><span class="rasti-l-icon" aria-hidden="true">💬</span><span class="rasti-l-label"></span><span class="rasti-badge" id="rasti-badge"></span></div>
+            <div id="rasti-panel" role="dialog" aria-label="گفتگوی آنلاین">
                 <div id="rasti-header">
                     <div class="rasti-avatar" id="rasti-avatar">🙂<span class="dot" id="rasti-status-dot"></span></div>
                     <div class="rasti-htext"><b id="rasti-title">پشتیبانی آنلاین</b><span id="rasti-subtitle">معمولاً در چند دقیقه پاسخ می‌دهیم</span></div>
                     <div id="rasti-close">✕</div>
                 </div>
                 <div id="rasti-offline-banner">در حال اتصال مجدد…</div>
-                <div id="rasti-notice"></div>
-                <div id="rasti-messages"></div>
+                <div id="rasti-notice" role="status"></div>
+                <div id="rasti-prechat"></div>
+                <div id="rasti-messages" aria-live="polite"></div>
                 <div id="rasti-quick"></div>
                 <div id="rasti-input-area">
                     <div class="rasti-pop" id="rasti-emoji-pop"></div>
@@ -316,6 +544,9 @@ class RastiChatWidget {
                 </div>
             </div>
         `;
+        this.styleEl = document.getElementById('rasti-style') as HTMLStyleElement;
+        this.greetingEl = document.getElementById('rasti-greeting')!;
+        this.prechatEl = document.getElementById('rasti-prechat')!;
         this.launcher = document.getElementById('rasti-launcher')!;
         this.panel = document.getElementById('rasti-panel')!;
         // signed attachment URLs expire (10 min): on a failed <img>/<audio> ask for a fresh one, once
@@ -355,8 +586,23 @@ class RastiChatWidget {
         this.messagesContainer.appendChild(typingRow);
     }
 
+    private listen(target: EventTarget, type: string, fn: EventListener) {
+        target.addEventListener(type, fn);
+        this.listeners.push({ target, type, fn });
+    }
+
     private initEvents() {
         this.launcher.addEventListener('click', () => this.togglePanel());
+        this.launcher.addEventListener('keydown', (e) => {
+            if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); this.togglePanel(); }
+        });
+        this.greetingEl.addEventListener('click', (e) => {
+            if ((e.target as HTMLElement).closest('.rasti-g-x')) { this.hideGreeting(); return; }
+            this.togglePanel(true);
+        });
+        // Escape closes the panel; SPA navigation re-evaluates the show/hide rules
+        this.listen(document, 'keydown', (e) => { if ((e as KeyboardEvent).key === 'Escape' && this.isOpen) this.togglePanel(false); });
+        this.listen(window, 'popstate', () => this.updateVisibility());
         document.getElementById('rasti-close')!.addEventListener('click', () => this.togglePanel(false));
 
         document.getElementById('rasti-send')!.addEventListener('click', () => this.sendMessage());
@@ -373,7 +619,7 @@ class RastiChatWidget {
             this.inputField.value += btn.textContent;
             this.inputField.focus();
         });
-        document.addEventListener('click', (e) => {
+        this.listen(document, 'click', (e) => {
             if (!(e.target as HTMLElement).closest('#rasti-emoji-btn') && !(e.target as HTMLElement).closest('#rasti-emoji-pop')) {
                 this.emojiPop.classList.remove('open');
             }
@@ -393,6 +639,8 @@ class RastiChatWidget {
     private togglePanel(force?: boolean) {
         this.isOpen = force ?? !this.isOpen;
         this.panel.classList.toggle('open', this.isOpen);
+        this.launcher.setAttribute('aria-expanded', String(this.isOpen));
+        if (this.isOpen) this.hideGreeting();
         if (typeof window.matchMedia === 'function' && window.matchMedia('(max-width: 480px)').matches) {
             document.body.style.overflow = this.isOpen ? 'hidden' : '';
         }
@@ -401,7 +649,157 @@ class RastiChatWidget {
             this.updateBadge();
             this.sendMarkRead();
             this.scrollToBottom();
+            if (this.needsPreChat()) {
+                this.renderPreChat();
+            } else if (this.startMode === 'on_open' && !this.convId && !this.unavailable) {
+                void this.ensureConversation();
+            }
         }
+    }
+
+    // ------------------------------------------------------------------------------------ pre-chat
+    private needsPreChat(): boolean {
+        return !!this.remote?.pre_chat.enabled && !this.convId && !this.preChatDone && !this.unavailable;
+    }
+
+    /** The answers sent with the conversation-creating call (`undefined` when the project asks no questions). */
+    private preChatPayload(): Record<string, string | boolean> | undefined {
+        const pc = this.remote?.pre_chat;
+        if (!pc?.enabled) return undefined;
+        const answers: Record<string, string | boolean> = { ...(this.preChatAnswers ?? {}) };
+        for (const f of pc.fields) {
+            const v = f.type === 'hidden' ? this.config.context?.[f.key] : undefined;
+            if (v) answers[f.key] = String(v).slice(0, 255);
+        }
+        return answers;
+    }
+
+    private renderPreChat(errors: Record<string, string> = {}) {
+        const pc = this.remote!.pre_chat;
+        const form = document.createElement('form');
+        form.noValidate = true;
+        const title = document.createElement('h2');
+        title.textContent = pc.title || this.strings.preChatTitle;
+        form.appendChild(title);
+        if (Object.keys(errors).length) {
+            const top = document.createElement('div');
+            top.className = 'rasti-form-err';
+            top.setAttribute('role', 'alert');
+            top.textContent = this.strings.formError;
+            form.appendChild(top);
+        }
+        for (const f of pc.fields) {
+            if (f.type === 'hidden') continue;
+            form.appendChild(this.buildField(f, errors[f.key]));
+        }
+        const submit = document.createElement('button');
+        submit.type = 'submit';
+        submit.className = 'rasti-submit';
+        submit.textContent = pc.submit_label || this.strings.startChat;
+        form.appendChild(submit);
+        form.addEventListener('submit', (e) => { e.preventDefault(); this.submitPreChat(form); });
+        this.prechatEl.replaceChildren(form);
+        this.panel.classList.add('rasti-prechat-on');
+        (form.querySelector('input,select,textarea') as HTMLElement | null)?.focus();
+    }
+
+    /** Built with DOM APIs and textContent only — configuration text is never interpreted as HTML. */
+    private buildField(f: PreChatField, error?: string): HTMLElement {
+        const wrap = document.createElement('div');
+        wrap.className = 'rasti-field';
+        const id = `rasti-pc-${f.key}`;
+        const errId = `${id}-err`;
+        const text = (f.label || f.key) + (f.required && f.type !== 'consent' ? ' *' : '');
+        const describe = (el: HTMLElement) => {
+            if (f.required) el.setAttribute('aria-required', 'true');
+            if (error) { el.setAttribute('aria-invalid', 'true'); el.setAttribute('aria-describedby', errId); }
+        };
+        if (f.type === 'radio') {
+            const set = document.createElement('fieldset');
+            const legend = document.createElement('legend');
+            legend.textContent = text;
+            set.appendChild(legend);
+            for (const [i, c] of (f.choices ?? []).entries()) {
+                const row = document.createElement('label');
+                row.className = 'rasti-inline';
+                const input = document.createElement('input');
+                input.type = 'radio'; input.name = id; input.value = c.value; input.id = `${id}-${i}`;
+                describe(input);
+                row.append(input, document.createTextNode(c.label));
+                set.appendChild(row);
+            }
+            wrap.appendChild(set);
+        } else if (f.type === 'checkbox' || f.type === 'consent') {
+            const row = document.createElement('label');
+            row.className = 'rasti-inline';
+            const input = document.createElement('input');
+            input.type = 'checkbox'; input.id = id; input.name = id;
+            describe(input);
+            row.append(input, document.createTextNode(f.label + (f.required ? ' *' : '')));
+            wrap.appendChild(row);
+        } else {
+            const label = document.createElement('label');
+            label.htmlFor = id;
+            label.textContent = text;
+            wrap.appendChild(label);
+            let control: HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement;
+            if (f.type === 'textarea') {
+                control = document.createElement('textarea');
+            } else if (f.type === 'select') {
+                const select = document.createElement('select');
+                const first = document.createElement('option');
+                first.value = ''; first.textContent = f.placeholder || this.strings.choose;
+                select.appendChild(first);
+                for (const c of f.choices ?? []) {
+                    const o = document.createElement('option');
+                    o.value = c.value; o.textContent = c.label;
+                    select.appendChild(o);
+                }
+                control = select;
+            } else {
+                const input = document.createElement('input');
+                input.type = f.type === 'email' ? 'email' : f.type === 'phone' ? 'tel' : 'text';
+                control = input;
+            }
+            control.id = id; control.name = id;
+            if ('placeholder' in control && f.type !== 'select') control.placeholder = f.placeholder || '';
+            if (f.max_length && 'maxLength' in control) control.maxLength = f.max_length;
+            describe(control);
+            wrap.appendChild(control);
+        }
+        const err = document.createElement('div');
+        err.className = 'rasti-err';
+        err.id = errId;
+        err.setAttribute('role', 'alert');
+        err.textContent = error || '';
+        wrap.appendChild(err);
+        return wrap;
+    }
+
+    private submitPreChat(form: HTMLFormElement) {
+        const answers: Record<string, string | boolean> = {};
+        const errors: Record<string, string> = {};
+        for (const f of this.remote!.pre_chat.fields) {
+            if (f.type === 'hidden') continue;
+            const id = `rasti-pc-${f.key}`;
+            let value: string | boolean = '';
+            if (f.type === 'checkbox' || f.type === 'consent') {
+                value = (form.querySelector(`#${id}`) as HTMLInputElement).checked;
+            } else if (f.type === 'radio') {
+                value = (form.querySelector(`input[name="${id}"]:checked`) as HTMLInputElement | null)?.value ?? '';
+            } else {
+                value = ((form.querySelector(`#${id}`) as HTMLInputElement).value || '').trim();
+            }
+            if (f.required && (value === '' || value === false)) errors[f.key] = this.strings.required;
+            else if (f.type === 'email' && value && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(String(value))) errors[f.key] = this.strings.invalidEmail;
+            else if (f.type === 'phone' && value && !/^\+?[0-9()\-\s]{5,20}$/.test(String(value))) errors[f.key] = this.strings.invalidPhone;
+            if (value !== '' && value !== false) answers[f.key] = value;
+        }
+        if (Object.keys(errors).length) { this.renderPreChat(errors); return; }
+        this.preChatAnswers = answers;
+        this.preChatDone = true;
+        this.panel.classList.remove('rasti-prechat-on');
+        this.inputField.focus();
     }
 
     private updateBadge() {
@@ -448,27 +846,151 @@ class RastiChatWidget {
 
     private async initSession() {
         try {
-            const stored = localStorage.getItem('rasti_session');
-            if (stored) {
-                this.sessionToken = stored;
+            if (this.config.bootstrap) {
+                await this.sessionWithBootstrap();
             } else {
-                await this.createSession();
+                // a verified session left behind by a previously signed-in customer must never be reused by an anonymous page
+                if (localStorage.getItem('rasti_session_sub')) await this.forgetStoredSession();
+                const stored = localStorage.getItem('rasti_session');
+                if (stored) {
+                    this.sessionToken = stored;
+                } else if (this.startMode === 'on_load') {
+                    await this.createSession();
+                }
             }
-            await this.startChat();
+            if (this.startMode === 'on_load') await this.startChat();
+            else if (this.sessionToken) await this.startChat(true, { peek: true });
         } catch (error) {
             console.error("RastiChat init failed", error);
+            this.setUnavailable(this.strings.unavailable);
+        } finally {
+            this.initDone = true;
         }
     }
 
+    private authenticatedOnly(): boolean {
+        return !!this.remote?.identity.authenticated_only;
+    }
+
+    /** Ask the host backend for an assertion; a failure means "not signed in" (guest), never an exception. */
+    private async safeBootstrap(): Promise<string | null> {
+        try {
+            return (await this.config.bootstrap!()) || null;
+        } catch (error) {
+            console.error("RastiChat bootstrap failed", error);
+            return null;
+        }
+    }
+
+    /** The `sub` claim of an assertion, read ONLY to tell whether the stored session belongs to the same person (the server verifies everything). */
+    private assertionSubject(assertion: string): string | null {
+        try {
+            const payload = assertion.split('.')[1].replace(/-/g, '+').replace(/_/g, '/');
+            const sub = JSON.parse(atob(payload.padEnd(Math.ceil(payload.length / 4) * 4, '='))).sub;
+            return typeof sub === 'string' ? sub : null;
+        } catch { return null; }
+    }
+
+    private async sessionWithBootstrap() {
+        const assertion = await this.safeBootstrap();
+        const sub = assertion ? this.assertionSubject(assertion) : null;
+        const stored = localStorage.getItem('rasti_session');
+        const storedSub = localStorage.getItem('rasti_session_sub');
+        if (stored && sub && storedSub === sub) { this.sessionToken = stored; return; }      // same person: resume
+        if (stored && !storedSub && !assertion) { this.sessionToken = stored; return; }      // anonymous guest keeps their session
+        if (stored && storedSub) await this.forgetStoredSession();                          // different person / signed out
+        const guestToken = localStorage.getItem('rasti_session');                           // a guest session (if any) is offered for upgrade
+        if (assertion) {
+            try { await this.exchangeAssertion(assertion, guestToken); return; } catch (error) {
+                console.error("RastiChat identity exchange failed", error);
+                if (this.authenticatedOnly()) { this.setUnavailable(this.strings.signIn); return; }
+            }
+        } else if (this.authenticatedOnly()) {
+            this.setUnavailable(this.strings.signIn);
+            return;
+        }
+        if (!this.sessionToken && this.startMode === 'on_load') await this.createGuestSession();
+    }
+
+    private async exchangeAssertion(assertion: string, guestToken: string | null = null) {
+        const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+        if (guestToken) headers['X-Widget-Session'] = guestToken;   // lets the server attach the guest's conversation to the verified customer
+        const res = await fetch(`${this.apiBase}/identity/customer/`, {
+            method: 'POST', headers, body: JSON.stringify({ project_key: this.config.projectKey, assertion }),
+        });
+        if (!res.ok) throw new Error(`identity exchange failed (${res.status})`);
+        const data = await res.json();
+        this.sessionToken = data.session_token;
+        localStorage.setItem('rasti_session', this.sessionToken!);
+        const sub = this.assertionSubject(assertion);
+        if (sub) localStorage.setItem('rasti_session_sub', sub);
+    }
+
+    /** Open a session: the trusted (bootstrapped) identity when the host provides one, otherwise a guest session. */
     private async createSession() {
+        if (this.config.bootstrap) {
+            const assertion = await this.safeBootstrap();
+            if (assertion) {
+                try { await this.exchangeAssertion(assertion); return; } catch (error) {
+                    if (this.authenticatedOnly()) throw error;
+                }
+            } else if (this.authenticatedOnly()) {
+                throw new Error('sign-in required');
+            }
+        }
+        await this.createGuestSession();
+    }
+
+    private async createGuestSession() {
         const res = await fetch(`${this.apiBase}/widget/init/`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ project_key: this.config.projectKey })
         });
         const data = await res.json();
+        if (res.ok === false) throw new Error(`session request failed (${res.status})`);
         this.sessionToken = data.session_token;
         localStorage.setItem('rasti_session', this.sessionToken!);
+        localStorage.removeItem('rasti_session_sub');
+    }
+
+    /** Revoke (best effort) and forget the stored session. */
+    private async forgetStoredSession() {
+        const token = localStorage.getItem('rasti_session');
+        localStorage.removeItem('rasti_session');
+        localStorage.removeItem('rasti_session_sub');
+        this.sessionToken = null;
+        this.convId = null;
+        this.preChatDone = false;
+        this.dropSocket();
+        if (!token) return;
+        try {
+            await fetch(`${this.apiBase}/widget/session/revoke/`, {
+                method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ session_token: token }),
+            });
+        } catch { /* revocation is best effort: the server expires the session anyway */ }
+    }
+
+    /**
+     * Make sure a conversation exists (it is created lazily on the first message / first open, so an idle visitor
+     * never leaves an empty conversation in the inbox). Resolves true once there is one.
+     */
+    private async ensureConversation(): Promise<boolean> {
+        if (this.convId) return true;
+        if (this.startingChat) { await this.startingChat; return !!this.convId; }
+        this.startingChat = (async () => {
+            try {
+                if (!this.sessionToken) await this.createSession();
+                await this.startChat(true, { preChat: this.preChatPayload() });
+            } catch (error) {
+                console.error("RastiChat could not start the conversation", error);
+                this.setUnavailable(this.authenticatedOnly() ? this.strings.signIn : this.strings.unavailable);
+            } finally {
+                this.startingChat = null;
+            }
+        })();
+        await this.startingChat;
+        return !!this.convId;
     }
 
     /**
@@ -481,6 +1003,7 @@ class RastiChatWidget {
         this.recoveringSession = true;
         try {
             localStorage.removeItem('rasti_session');
+            localStorage.removeItem('rasti_session_sub');
             this.sessionToken = null;
             this.convId = null;
             this.dropSocket();
@@ -529,8 +1052,11 @@ class RastiChatWidget {
     public async logout() {
         const token = this.sessionToken;
         localStorage.removeItem('rasti_session');
+        localStorage.removeItem('rasti_session_sub');
         this.sessionToken = null;
         this.convId = null;
+        this.preChatAnswers = null;
+        this.preChatDone = false;
         this.dropSocket();
         if (!token) return;
         try {
@@ -544,18 +1070,34 @@ class RastiChatWidget {
         }
     }
 
-    private async startChat(allowRecovery = true) {
+    private async startChat(allowRecovery = true, opts: { peek?: boolean; preChat?: Record<string, string | boolean> } = {}) {
         try {
+            const body: Record<string, unknown> = { session_token: this.sessionToken };
+            if (opts.peek) body.create = false;           // restore an existing conversation without creating an empty one
+            if (opts.preChat) body.pre_chat = opts.preChat;
             const res = await fetch(`${this.apiBase}/widget/start/`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ session_token: this.sessionToken })
+                body: JSON.stringify(body)
             });
             if (res.status === 401 && allowRecovery) {
-                if (await this.recoverFromInvalidSession()) await this.startChat(false);
+                if (await this.recoverFromInvalidSession()) await this.startChat(false, opts);
+                return;
+            }
+            if (res.status === 400 && opts.preChat !== undefined) {
+                // the project's form changed or an answer was refused: ask again, showing the server's per-field messages
+                const err = await res.json().catch(() => ({}));
+                this.preChatDone = false;
+                this.renderPreChat(err && typeof err.errors === 'object' ? err.errors : {});
+                if (!this.isOpen) this.togglePanel(true);
+                return;
+            }
+            if (res.status === 403 && (await res.clone().json().catch(() => ({}))).code === 'identity_required') {
+                this.setUnavailable(this.strings.signIn);
                 return;
             }
             const data = await res.json();
+            if (!data.id) return;                         // peek found nothing: the conversation starts later
             this.convId = data.id;
             this.applyBranding(data.branding);
             if (data.rotate_session) await this.rotateSession();
@@ -727,10 +1269,15 @@ class RastiChatWidget {
 
     private sendMessage() {
         const text = this.inputField.value.trim();
-        if (!text || !this.convId || !this.sessionToken) return;
+        if (!text) return;
+        const notReady = !this.convId || !this.sessionToken;
+        if (notReady && this.unavailable) return;
+        // Not ready yet = either the first message of a lazily started conversation, or the visitor was quicker than the initial
+        // session/conversation setup. Both cases queue the message (shown as pending) instead of dropping it silently.
+        const lazy = notReady;
 
         const clientId = 'msg_' + Date.now() + '_' + Math.random().toString(36).slice(2, 8);
-        if (!this.canSend()) {
+        if (lazy || !this.canSend()) {
             // Not authenticated (yet / any more): never drop the message silently. Show it as pending and show the
             // connection state; it is sent, in order, as soon as the server acknowledges the ticket.
             if (this.pendingSends.length >= 20) return;
@@ -740,9 +1287,15 @@ class RastiChatWidget {
                 client_message_id: clientId, created_at: new Date().toISOString(), seen: false,
             });
             (this.messagesContainer.lastElementChild as HTMLElement | null)?.classList.add('rasti-pending');
-            this.offlineBanner.classList.add('show');
             this.inputField.value = '';
             this.scrollToBottom();
+            if (lazy) {
+                // first message: open the conversation now; the queued message goes out (in order) once the socket authenticates.
+                // While the initial setup is still running it will create the conversation itself — do not race it with a second start.
+                if (this.initDone || this.startMode !== 'on_load') void this.ensureConversation();
+                return;
+            }
+            this.offlineBanner.classList.add('show');
             return;
         }
         this.ws!.send(JSON.stringify({ message: text, client_message_id: clientId }));
@@ -765,6 +1318,7 @@ class RastiChatWidget {
     }
 
     private async uploadFile(file: File, messageType: 'IMAGE' | 'VOICE', extra?: Record<string, string>) {
+        if (!this.convId && this.startMode !== 'on_load' && !this.unavailable) await this.ensureConversation();
         if (!this.convId || !this.sessionToken) return;
         const clientId = 'msg_' + Date.now() + '_' + Math.random().toString(36).slice(2, 8);
         const form = new FormData();
@@ -963,8 +1517,16 @@ let activeWidget: RastiChatWidget | null = null;
 
 window.RastiChat = {
     init: (config: RastiChatConfig) => {
+        activeWidget?.destroy();
         activeWidget = new RastiChatWidget(config);
     },
+    /** Open / close the chat panel programmatically (e.g. from a "Contact us" button on the host page). */
+    open: () => activeWidget?.setOpen(true),
+    close: () => activeWidget?.setOpen(false),
+    /** Re-evaluate the show/hide path rules (a single-page app can call this after a client-side navigation). */
+    refreshVisibility: () => activeWidget?.updateVisibility(),
+    /** Remove the widget from the page and stop its network activity. */
+    destroy: () => { activeWidget?.destroy(); activeWidget = null; },
     /** Revoke the customer's session (call when the shopper logs out of the store). */
     logout: async () => {
         await activeWidget?.logout();

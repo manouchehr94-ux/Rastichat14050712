@@ -1,10 +1,14 @@
 'use client';
 import { useState, useEffect, useRef } from 'react';
-import { fetchPlatformInbox, fetchPlatformSupportMessages, assignTicket, replyTicket, connectSupportWebSocket, markPlatformRead } from '@/lib/api';
+import {
+    fetchPlatformInbox, fetchPlatformSupportMessages, assignTicket, replyTicket, connectSupportWebSocket, markPlatformRead,
+    fetchPlatformWorkspaces, startPlatformThread, closePlatformThread, reopenPlatformThread, type PlatformWorkspace,
+} from '@/lib/api';
+import { isMine, statusLabel, openedByLabel } from '@/lib/supportThread';
 import { useRouter } from 'next/navigation';
 
-interface Conversation { id: string; status: string; subject: string; unread_count?: number; }
-interface Message { id: string; content: string; sender_type: string; }
+interface Conversation { id: string; status: string; subject: string; unread_count?: number; workspace_name?: string; opened_by_side?: string; }
+interface Message { id: string; content: string; sender_type: string; sender_side?: string; }
 
 export default function PlatformInboxPage() {
     const [conversations, setConversations] = useState<Conversation[]>([]);
@@ -12,6 +16,13 @@ export default function PlatformInboxPage() {
     const [messages, setMessages] = useState<Message[]>([]);
     const [input, setInput] = useState('');
     const [mobileView, setMobileView] = useState<'list' | 'chat'>('list');
+    const [showNew, setShowNew] = useState(false);
+    const [workspaces, setWorkspaces] = useState<PlatformWorkspace[]>([]);
+    const [newWs, setNewWs] = useState('');
+    const [newSubject, setNewSubject] = useState('');
+    const [newMsg, setNewMsg] = useState('');
+    const [newError, setNewError] = useState('');
+    const [starting, setStarting] = useState(false);
     const wsRef = useRef<WebSocket | null>(null);
     const router = useRouter();
 
@@ -57,11 +68,43 @@ export default function PlatformInboxPage() {
         alert('Assigned to you!');
     };
 
+    const openNewForm = () => {
+        setShowNew(true); setNewError('');
+        fetchPlatformWorkspaces().then(list => { setWorkspaces(list); if (list[0]) setNewWs(String(list[0].id)); }).catch(() => setNewError('دریافت فهرست سازمان‌ها ناموفق بود.'));
+    };
+
+    /** Platform -> tenant: opens (or resumes) the conversation; the tenant never has to write first. */
+    const handleStart = async () => {
+        if (!newWs || !newMsg.trim() || starting) return;
+        setStarting(true); setNewError('');
+        try {
+            const conv = await startPlatformThread({
+                workspace_id: Number(newWs), subject: newSubject.trim() || 'پیام پلتفرم', message: newMsg.trim(),
+                client_message_id: 'start_' + Date.now() + '_' + Math.random().toString(36).slice(2, 8),
+            });
+            setShowNew(false); setNewSubject(''); setNewMsg('');
+            await loadInbox();
+            await handleSelectConv(conv);
+        } catch (e) {
+            const status = (e as { status?: number }).status;
+            setNewError(status === 404 ? 'این سازمان در دسترس شما نیست.' : status === 409 ? 'این سازمان فعال نیست.' : 'ارسال پیام ناموفق بود. دوباره تلاش کنید.');
+        } finally { setStarting(false); }
+    };
+
+    const handleToggleClosed = async () => {
+        if (!selectedConv) return;
+        try {
+            const updated = selectedConv.status === 'CLOSED' ? await reopenPlatformThread(selectedConv.id) : await closePlatformThread(selectedConv.id);
+            setSelectedConv({ ...selectedConv, status: updated.status });
+            loadInbox();
+        } catch (e) { /* handle */ }
+    };
+
     const handleReply = async () => {
         if (!selectedConv || !input.trim()) return;
         const clientId = 'msg_' + Date.now();
         const content = input; setInput('');
-        setMessages(prev => [...prev, { id: clientId, content, sender_type: 'USER' }]);
+        setMessages(prev => [...prev, { id: clientId, content, sender_type: 'USER', sender_side: 'platform' }]);
         try { await replyTicket(selectedConv.id, content, clientId); } catch (e) { /* handle */ }
     };
 
@@ -74,9 +117,27 @@ export default function PlatformInboxPage() {
                     mobileView === 'chat' ? 'hidden md:flex' : 'flex'
                 }`}
             >
-                <div className="px-4 py-4 border-b font-bold text-indigo-600 flex-none">
-                    صندوق ورودی پشتیبانی
+                <div className="px-4 py-4 border-b font-bold text-indigo-600 flex-none flex items-center justify-between gap-2">
+                    <span>صندوق ورودی پشتیبانی</span>
+                    <button type="button" onClick={openNewForm} className="text-xs bg-indigo-600 text-white px-2.5 py-1.5 rounded-lg font-normal">گفتگوی جدید با سازمان</button>
                 </div>
+                {showNew && (
+                    <form className="p-4 border-b bg-gray-50 flex flex-col gap-2" aria-label="گفتگوی جدید با سازمان" onSubmit={e => { e.preventDefault(); void handleStart(); }}>
+                        <label className="text-xs font-semibold text-gray-600" htmlFor="new-ws">سازمان</label>
+                        <select id="new-ws" value={newWs} onChange={e => setNewWs(e.target.value)} className="w-full p-2 border rounded text-sm bg-white">
+                            {workspaces.map(w => <option key={w.id} value={w.id}>{w.name}</option>)}
+                        </select>
+                        <label className="text-xs font-semibold text-gray-600" htmlFor="new-subject">موضوع</label>
+                        <input id="new-subject" value={newSubject} onChange={e => setNewSubject(e.target.value)} className="w-full p-2 border rounded text-sm" />
+                        <label className="text-xs font-semibold text-gray-600" htmlFor="new-msg">پیام</label>
+                        <textarea id="new-msg" value={newMsg} onChange={e => setNewMsg(e.target.value)} className="w-full p-2 border rounded text-sm h-24" />
+                        {newError && <p role="alert" className="text-xs text-red-600">{newError}</p>}
+                        <div className="flex gap-2">
+                            <button type="submit" disabled={starting || !newWs || !newMsg.trim()} className="flex-1 bg-green-600 text-white p-2 rounded text-sm disabled:opacity-60">{starting ? 'در حال ارسال…' : 'ارسال'}</button>
+                            <button type="button" onClick={() => setShowNew(false)} className="px-3 border rounded text-sm">انصراف</button>
+                        </div>
+                    </form>
+                )}
 
                 <div className="flex-1 min-h-0 overflow-y-auto">
                     {conversations.map(conv => (
@@ -90,6 +151,7 @@ export default function PlatformInboxPage() {
                         >
                             <div className="flex justify-between items-start gap-3">
                                 <span className="font-medium text-sm min-w-0 break-words">
+                                    {conv.workspace_name && <span className="block text-[11px] text-indigo-600">{conv.workspace_name}</span>}
                                     {conv.subject}
                                 </span>
 
@@ -101,7 +163,8 @@ export default function PlatformInboxPage() {
                             </div>
 
                             <div className="text-xs text-gray-500 mt-1">
-                                {conv.status}
+                                {statusLabel(conv.status, 'platform')}
+                                {conv.opened_by_side === 'PLATFORM' && <span className="mr-2 text-indigo-600">· {openedByLabel('PLATFORM')}</span>}
                             </div>
                         </button>
                     ))}
@@ -134,16 +197,21 @@ export default function PlatformInboxPage() {
                                 </button>
 
                                 <span className="font-bold text-sm truncate">
-                                    #{selectedConv.subject}
+                                    {selectedConv.workspace_name ? `${selectedConv.workspace_name} — ` : ''}#{selectedConv.subject}
                                 </span>
                             </div>
 
-                            <button
-                                onClick={handleAssign}
-                                className="text-xs bg-indigo-600 text-white px-3 py-2 rounded-lg flex-none"
-                            >
-                                تخصیص به من
-                            </button>
+                            <div className="flex gap-2 flex-none">
+                                <button type="button" onClick={handleToggleClosed} className="text-xs border px-3 py-2 rounded-lg">
+                                    {selectedConv.status === 'CLOSED' ? 'بازگشایی' : 'بستن گفتگو'}
+                                </button>
+                                <button
+                                    onClick={handleAssign}
+                                    className="text-xs bg-indigo-600 text-white px-3 py-2 rounded-lg"
+                                >
+                                    تخصیص به من
+                                </button>
+                            </div>
                         </div>
 
                         <div className="flex-1 min-h-0 overflow-y-auto px-3 sm:px-4 py-4 space-y-3">
@@ -151,14 +219,14 @@ export default function PlatformInboxPage() {
                                 <div
                                     key={msg.id}
                                     className={`flex ${
-                                        msg.sender_type === 'USER'
+                                        isMine(msg, 'platform')
                                             ? 'justify-start'
                                             : 'justify-end'
                                     }`}
                                 >
                                     <div
                                         className={`p-3 rounded-2xl max-w-[85%] sm:max-w-xs text-sm break-words whitespace-pre-wrap ${
-                                            msg.sender_type === 'USER'
+                                            isMine(msg, 'platform')
                                                 ? 'bg-indigo-600 text-white'
                                                 : 'bg-white border border-gray-200'
                                         }`}

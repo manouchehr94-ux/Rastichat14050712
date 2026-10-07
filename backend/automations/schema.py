@@ -65,6 +65,7 @@ CONDITION_FIELDS = {
     'customer.total_spending': 'number',
     'customer.location': 'string',
     'customer.metadata': 'metadata',  # special-cased: requires a "path" key
+    'conversation.pre_chat': 'metadata',  # the visitor's pre-chat answer for question key "path"
     # Message (only populated for message-triggered events)
     'message.type': 'string',
     'message.content': 'string',
@@ -183,10 +184,10 @@ def validate_conditions(tree, depth=0, _counter=None):
         raise ValidationError({'conditions': f'Operator "{operator}" is not valid for field "{field}".'})
     if operator not in VALUELESS_OPERATORS and 'value' not in tree:
         raise ValidationError({'conditions': f'Operator "{operator}" on "{field}" requires a "value".'})
-    if field == 'customer.metadata':
+    if field in ('customer.metadata', 'conversation.pre_chat'):
         path = tree.get('path')
         if not isinstance(path, str) or not path or len(path) > 64 or not path.replace('_', '').isalnum():
-            raise ValidationError({'conditions': 'customer.metadata conditions require an alphanumeric "path".'})
+            raise ValidationError({'conditions': f'{field} conditions require an alphanumeric "path".'})
     if operator in ('in', 'not_in') and not isinstance(tree.get('value'), list):
         raise ValidationError({'conditions': f'Operator "{operator}" requires a list "value".'})
 

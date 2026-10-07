@@ -15,6 +15,7 @@ from rest_framework.views import APIView
 from common import ws_tickets
 from visitors.sessions import get_request_session
 
+from common import observability
 from . import ws_access
 
 _NOT_FOUND = {'error': 'Not found'}
@@ -25,6 +26,7 @@ def _issue(**kwargs):
         ticket = ws_tickets.issue_ticket(**kwargs)
     except redis_lib.RedisError:
         return Response({'error': 'Realtime service unavailable'}, status=status.HTTP_503_SERVICE_UNAVAILABLE)
+    observability.emit('ws_ticket_issued', label=kwargs.get('kind', '-'))
     return Response({'ticket': ticket, 'expires_in': settings.WS_TICKET_TTL_SECONDS}, status=status.HTTP_201_CREATED)
 
 

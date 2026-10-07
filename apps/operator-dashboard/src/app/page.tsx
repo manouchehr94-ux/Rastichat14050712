@@ -46,9 +46,12 @@ interface AppNotification {
 interface Tag { id: string; name: string; color: string; }
 interface Note { id: string; body: string; created_by_email: string | null; created_at: string; }
 interface CustomerOrderSummary { id: string; product_name: string; product_image: string; price: string; status: string; ordered_at: string; }
+interface PreChatAnswer { key: string; label: string; type: string; value: string | boolean; source: 'visitor' | 'client' }
 interface CustomerContext {
     name: string | null; phone: string | null; location: string; customer_since: string;
     order_count: number; total_spent: string; score: string | null; recent_orders: CustomerOrderSummary[];
+    pre_chat?: PreChatAnswer[]; identity_verified?: boolean;
+    host_context?: { profile: Record<string, string | number | boolean>; context: Record<string, string | number | boolean>; updated_at: string } | null;
 }
 const ORDER_STATUS_LABEL: Record<string, string> = {
     PROCESSING: 'در حال پردازش', SHIPPED: 'در حال ارسال', DELIVERED: 'تحویل شده', CANCELLED: 'لغو شده',
@@ -307,6 +310,7 @@ function CustomerInfoPanel({
             <div className="border border-gray-200 rounded-xl p-4 text-center">
                 <div className="w-16 h-16 mx-auto rounded-full bg-gradient-to-br from-gold to-terracotta-2 text-white flex items-center justify-center font-bold text-xl">{initials(selectedConv.visitor?.name)}</div>
                 <div className="font-bold mt-2">{selectedConv.visitor?.name || 'مهمان'}</div>
+                {customerContext?.identity_verified && <div className="inline-block mt-1 text-[10.5px] font-semibold px-2 py-0.5 rounded-full bg-green-50 text-green-700" title="هویت این مشتری توسط برنامهٔ میزبان تأیید شده است">✓ هویت تأییدشده</div>}
                 <div className="text-xs text-gray-400 mt-0.5">{customerContext?.phone || selectedConv.visitor?.mobile || selectedConv.visitor?.email || '—'}</div>
                 {customerContext?.location && <div className="text-[11px] text-gray-400 mt-0.5">📍 {customerContext.location}</div>}
                 {selectedConv.visitor?.created_at && <div className="text-[11px] text-gray-400 mt-2">عضویت از {new Date(selectedConv.visitor.created_at).toLocaleDateString('fa-IR')}</div>}
@@ -333,6 +337,34 @@ function CustomerInfoPanel({
                     </div>
                 </div>
             </div>
+
+            {customerContext?.pre_chat && customerContext.pre_chat.length > 0 && (
+                <div className="border border-gray-200 rounded-xl p-4" data-testid="pre-chat-answers">
+                    <div className="text-xs font-bold text-gray-500 mb-2">پاسخ‌های پیش از گفتگو</div>
+                    <dl className="flex flex-col gap-2 text-xs">
+                        {customerContext.pre_chat.map(a => (
+                            <div key={a.key}>
+                                <dt className="text-[10.5px] text-gray-400">{a.label || a.key}{a.source === 'client' ? ' (از صفحه، تأییدنشده)' : ''}</dt>
+                                <dd className="font-medium break-words">{typeof a.value === 'boolean' ? (a.value ? 'بله' : 'خیر') : a.value}</dd>
+                            </div>
+                        ))}
+                    </dl>
+                </div>
+            )}
+
+            {customerContext?.host_context && (Object.keys(customerContext.host_context.profile).length > 0 || Object.keys(customerContext.host_context.context).length > 0) && (
+                <div className="border border-gray-200 rounded-xl p-4" data-testid="host-context">
+                    <div className="text-xs font-bold text-gray-500 mb-2">اطلاعات ارسال‌شده از برنامهٔ میزبان</div>
+                    <dl className="flex flex-col gap-2 text-xs">
+                        {[...Object.entries(customerContext.host_context.profile), ...Object.entries(customerContext.host_context.context)].map(([k, v]) => (
+                            <div key={k}>
+                                <dt className="text-[10.5px] text-gray-400">{k.replace(/_/g, ' ')}</dt>
+                                <dd className="font-medium break-words">{typeof v === 'boolean' ? (v ? 'بله' : 'خیر') : String(v)}</dd>
+                            </div>
+                        ))}
+                    </dl>
+                </div>
+            )}
 
             {customerContext && customerContext.recent_orders.length > 0 && (
                 <div className="border border-gray-200 rounded-xl p-4">
@@ -964,6 +996,7 @@ const [showMobileActions, setShowMobileActions] = useState(false);
                         <Link href="/knowledge-base" className="text-xs text-gray-400 hover:text-terracotta" title="پایگاه دانش">📚</Link>
                         <Link href="/macros" className="text-xs text-gray-400 hover:text-terracotta" title="ماکروها">⚡</Link>
                         <Link href="/automations" className="text-xs text-gray-400 hover:text-terracotta" title="اتوماسیون‌ها">⚙️</Link>
+                        <Link href="/settings/widget" className="text-xs text-gray-400 hover:text-terracotta" title="تنظیمات ویجت گفتگو">🧩</Link>
                         <button onClick={handleLogout} className="text-xs text-gray-400 hover:text-red-500">خروج</button>
                     </div>
                 </div>

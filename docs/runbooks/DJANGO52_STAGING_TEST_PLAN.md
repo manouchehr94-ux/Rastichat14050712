@@ -1,7 +1,7 @@
 # Django 5.2 — isolated staging test plan
 
 **Status: plan and tooling only.** Nothing in this document or in the referenced tools touches the live chat server,
-its database, Nginx, remotes, or RastiSi. Django 5.2 (with DRF 3.17, Channels 4.3, simplejwt, drf-spectacular 0.30) plus the P1
+its database, Nginx, remotes, or any live host application. Django 5.2 (with DRF 3.17, Channels 4.3, simplejwt, drf-spectacular 0.30) plus the P1
 hardening (WS revocation, visitor-session lifecycle, WS tickets, allowed domains, abuse protection) must pass this plan
 on an **independent staging stack with synthetic data** before any deployment is even proposed.
 
@@ -14,7 +14,7 @@ on an **independent staging stack with synthetic data** before any deployment is
 | Synthetic data only (no customer export, no production dump) | §3 seed list; never restore a backup into staging |
 | Own secrets (`SECRET_KEY`, JWT, DB password) generated for staging | never reuse production values |
 | Explicit opt-in | `DJANGO52_ISOLATED_STAGING=yes-this-is-an-isolated-staging-stack` required by preflight and Playwright |
-| No outbound side effects | email backend = console/file, no payment/SMS keys, no RastiSi URLs configured |
+| No outbound side effects | email backend = console/file, no payment/SMS keys, no live host-application URLs configured |
 | No deploy workflow is run for this | the stack is built by hand/compose from a PR branch |
 
 ## 2. Stack to build
