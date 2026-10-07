@@ -134,7 +134,7 @@ History is retained in every case; erasure is an explicit, operator-approved ret
 
 ## 11. Deployment guardrails
 
-In `staging`/`production` the process refuses to start with `DEBUG=1`, a missing `DJANGO_SECRET_KEY`, wildcard `ALLOWED_HOSTS`,
+In `staging`/`production` the process refuses to start with `DEBUG=1`, a missing `DJANGO_SECRET_KEY`, a missing/empty database password or the published development one (`DB_PASSWORD`, or the password inside `DATABASE_URL`; the development-only default exists only when `ENVIRONMENT=development`), wildcard `ALLOWED_HOSTS`,
 no `MONITORING_TOKEN`, or the legacy credential-in-URL switches without their acknowledgements, and the deploy gate rejects a weak secret key; `manage.py check --deploy --fail-level WARNING
 --tag security` is the CI/deploy gate. CI also runs gitleaks over the full history, Bandit and `pip-audit`.
 

@@ -47,14 +47,14 @@ Three public hostnames are expected (`BACKEND_DOMAIN`, `OPERATOR_DOMAIN`, `PLATF
 ## 3. Configuration
 
 All configuration is environment variables, validated at start-up: in `staging`/`production` the process **refuses to start** on
-`DEBUG=1`, a missing secret key, wildcard `ALLOWED_HOSTS`, missing `MONITORING_TOKEN`, or unsafe legacy-credential settings.
+`DEBUG=1`, a missing secret key, a missing/empty database password (or the published development one), wildcard `ALLOWED_HOSTS`, missing `MONITORING_TOKEN`, or unsafe legacy-credential settings.
 
 * Templates (no secrets): `.env.production.example`, `.env.staging.example`, `.env.example` (local development).
 * Reference of every variable: [`runbooks/ENVIRONMENT_VARIABLES.md`](runbooks/ENVIRONMENT_VARIABLES.md).
 * Generate secrets with `scripts/generate-secrets.sh`. **Never** commit a real `.env`, and keep `chmod 600` on it.
 * Minimum for production: `ENVIRONMENT=production`, `DEBUG=0`, `DJANGO_SECRET_KEY`, `ALLOWED_HOSTS`, `CSRF_TRUSTED_ORIGINS`
   (dashboard origins), `CORS_ALLOWED_ORIGINS` (dashboards + every site that calls the API from a browser; widget origins are
-  additionally derived from each project's allowed domains), `DATABASE_URL` or `DB_*`, `REDIS_URL` or `REDIS_*`, `MONITORING_TOKEN`,
+  additionally derived from each project's allowed domains), `DATABASE_URL` (password inside it) or `DB_HOST` + `DB_PASSWORD` + `DB_NAME`/`DB_USER` — **the database password is mandatory and has no default in these environments** — `REDIS_URL` or `REDIS_*`, `MONITORING_TOKEN`,
   `MEDIA_ROOT`, `STATIC_ROOT`.
 * **Dashboards bake the API/WebSocket URLs at build time** (`NEXT_PUBLIC_API_BASE_URL`, `NEXT_PUBLIC_WS_BASE_URL`): a different URL means a rebuild.
 * `INTEGRATION_TOKEN_AUDIENCE` should differ between environments so a token minted for staging is useless in production.

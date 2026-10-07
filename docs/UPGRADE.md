@@ -12,7 +12,7 @@ How to move a running deployment to a newer version safely, and how to back out.
 3. **Rehearse** on a copy: restore last night's backup into a scratch database and run the new release's migrations against it.
    (`scripts/staging/sandbox/upgrade-migration.sh` automates "fresh database" *and* "upgrade from the previous release with seeded rows".)
 4. Run the deploy gate with the **production** environment variables: `python manage.py check --deploy --fail-level WARNING --tag security`.
-5. Compare your `.env` with the shipped `.env.production.example`; new variables always have safe defaults, but read the changelog.
+5. Compare your `.env` with the shipped `.env.production.example`; new variables always have safe defaults, but read the changelog. **Operator action:** staging/production now refuse to start without an explicit, non-default database password (`DB_PASSWORD`, or a password inside `DATABASE_URL`) — confirm yours is set *before* you deploy this release.
 
 ## 2. Order of operations
 

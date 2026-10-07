@@ -62,7 +62,7 @@ The full, copy-pasteable walkthrough is [`docs/QUICKSTART.md`](docs/QUICKSTART.m
 
 ```bash
 cd backend && python -m venv .venv && . .venv/bin/activate && pip install -r requirements.txt
-export DB_HOST=localhost DB_NAME=rastichat DB_USER=rastichat DB_PASSWORD=<dev password> REDIS_HOST=localhost DEBUG=1
+export ENVIRONMENT=development DEBUG=1 DB_HOST=localhost DB_NAME=rastichat DB_USER=rastichat DB_PASSWORD=<local dev password> REDIS_HOST=localhost
 python manage.py migrate
 python -m daphne -b 127.0.0.1 -p 8080 config.asgi:application
 ```
@@ -104,4 +104,9 @@ secret scanning and the reference-host E2E on every pull request.
 ## Security
 
 See [`docs/SECURITY.md`](docs/SECURITY.md) for the model and how to report a vulnerability. Never commit real `.env` files, keys or dumps;
-only the `.env*.example` templates are tracked.
+only the `.env*.example` templates are tracked. Staging and production refuse to start without an explicit database password.
+
+## License
+
+RastiChat is licensed under the [Apache License, Version 2.0](LICENSE). Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS, without warranties or conditions of any kind.
